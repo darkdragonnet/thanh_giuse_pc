@@ -5,6 +5,20 @@
   </a>
 </div>
 
+<% if (typeof permissionError !== 'undefined' && permissionError) { %>
+  <div class="alert alert-warning d-flex align-items-center justify-content-between p-3 mb-4 shadow-sm" role="alert">
+    <div>
+      <i class="bi bi-exclamation-triangle-fill fs-5 me-2"></i>
+      <strong>Phát hiện lỗi quyền 403:</strong> <%= permissionMessage %>
+    </div>
+    <form method="POST" action="/departments/fix/<%= departmentID %>" class="d-inline ms-3" onsubmit="return confirm('Hệ thống sẽ xoá và tạo lại phòng ban này qua API app để cấp đúng quyền Place ID. Tiếp tục?');">
+      <button type="submit" class="btn btn-warning fw-bold text-dark text-nowrap">
+        <i class="bi bi-wrench-adjustable me-1"></i>Fix ngay (Tạo lại qua App)
+      </button>
+    </form>
+  </div>
+<% } %>
+
 <div class="row g-4">
   <!-- Cột trái: Form gán nhân sự -->
   <div class="col-md-5">

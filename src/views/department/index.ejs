@@ -37,6 +37,11 @@
               <a href="/departments/<%= dept.id %>/members" class="btn btn-sm btn-outline-primary me-1" title="Xem & Quản lý Thành viên">
                 <i class="bi bi-people me-1"></i>Thành viên
               </a>
+              <form method="POST" action="/departments/fix/<%= dept.id %>" class="d-inline" onsubmit="return confirm('Hệ thống sẽ xoá và tạo lại phòng ban này qua API app để cấp đúng quyền Place ID. Tiếp tục?');">
+                <button type="submit" class="btn btn-sm btn-outline-warning me-1" title="Fix quyền Place ID">
+                  <i class="bi bi-wrench-adjustable me-1"></i>Fix
+                </button>
+              </form>
               <form method="POST" action="/departments/delete/<%= dept.id %>?_method=DELETE" class="d-inline" onsubmit="return confirm('Bạn có chắc chắn muốn xóa phòng ban này?');">
                 <button type="submit" class="btn btn-sm btn-outline-danger" title="Xóa phòng ban">
                   <i class="bi bi-trash-fill me-1"></i>Xóa

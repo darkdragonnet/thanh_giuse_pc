@@ -14,6 +14,9 @@ router.put('/update/:id', departmentController.handleUpdate);
 // [DELETE] Xóa phòng ban
 router.delete('/delete/:id', departmentController.handleDelete);
 
+// [FIX] Tự động xoá và tạo lại phòng ban qua API app (gắn đúng placeID)
+router.post('/fix/:id', departmentController.handleFix);
+
 // [READ] Xem danh sách thành viên thuộc phòng ban
 router.get('/:departmentID/members', departmentController.viewMembers);
 
