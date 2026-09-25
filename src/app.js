@@ -21,7 +21,12 @@ const redisClient = createClient({
   url: `redis://${process.env.REDIS_HOST || 'redis'}:${process.env.REDIS_PORT || 6379}/${process.env.REDIS_DB || 4}`
 });
 
-redisClient.connect().catch(console.error);
+redisClient.on('error', (err) => console.error('[Redis Client Error]', err.message));
+redisClient.on('connect', () => console.log('✅ [Redis] Da ket noi thanh cong'));
+
+redisClient.connect().catch((err) => {
+  console.error('[Redis Connect Failed]', err.message);
+});
 
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));

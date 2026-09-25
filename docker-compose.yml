@@ -7,6 +7,10 @@ services:
       - "3001:3000"
     env_file:
       - .env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=4
     depends_on:
       redis:
         condition: service_healthy
@@ -28,8 +32,6 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: thanh_giuse_pc_tunnel
     restart: unless-stopped
-    command: tunnel run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       - app
