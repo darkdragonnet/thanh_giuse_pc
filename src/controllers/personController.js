@@ -39,7 +39,7 @@ exports.renderRegisterForm = async (req, res) => {
 // [CREATE] Xử lý Đăng ký Nhân sự mới
 exports.handleRegister = async (req, res, next) => {
   try {
-    const { name, aliasID, title, base64_image } = req.body;
+    const { name, aliasID, title, departmentID, base64_image } = req.body;
 
     if (!req.file && !base64_image) {
       req.flash('error', 'Vui lòng chụp hoặc tải ảnh khuôn mặt.');
@@ -51,15 +51,21 @@ exports.handleRegister = async (req, res, next) => {
       base64String: base64_image || null
     });
 
+    const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+    const publicImageUrl = `${baseUrl.replace(/\/$/, '')}/uploads/${processedImage.filename}`;
+
     await queueService.enqueueRegisterPerson({
       name,
       aliasID,
       title,
+      departmentID: departmentID || null,
       imagePath: processedImage.processedPath,
-      imageFilename: processedImage.filename
+      imageFilename: processedImage.filename,
+      publicImageUrl
     });
 
-    req.flash('success', `Đã nhận yêu cầu đăng ký cho "${name}". Tiến trình xử lý ảnh và đồng bộ Cloud đang chạy ngầm.`);
+    const deptMsg = departmentID ? ' và gán vào phòng ban đã chọn' : '';
+    req.flash('success', `Đã nhận yêu cầu đăng ký cho "${name}"${deptMsg}. Tiến trình xử lý đang chạy ngầm.`);
     res.redirect('/');
   } catch (err) {
     console.error('[Register Error]', err.message);
@@ -122,8 +128,10 @@ exports.handleUpdate = async (req, res, next) => {
         filePath: req.file ? req.file.path : null,
         base64String: base64_image || null
       });
+      const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
       updatePayload.imagePath = processedImage.processedPath;
       updatePayload.imageFilename = processedImage.filename;
+      updatePayload.publicImageUrl = `${baseUrl.replace(/\/$/, '')}/uploads/${processedImage.filename}`;
     }
     await queueService.enqueueUpdatePerson(updatePayload);
 

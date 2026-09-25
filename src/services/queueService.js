@@ -22,15 +22,16 @@ const hanetQueue = new Queue('hanet-sync', {
 
 // Xử lý Job đăng ký nhân sự ngầm
 hanetQueue.process('register_person_job', 3, async (job) => {
-  const { name, aliasID, title, imagePath, publicImageUrl } = job.data;
+  const { name, aliasID, title, departmentID, imagePath, publicImageUrl } = job.data;
 
   try {
+    const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
     // Gọi HANET AI Cloud API
     const result = await hanetService.registerPerson({
       name,
       aliasID,
       title,
-      faceUrl: publicImageUrl || `http://your-domain.com/uploads/${job.data.imageFilename}`
+      faceUrl: publicImageUrl || `${fallbackBaseUrl}/uploads/${job.data.imageFilename}`
     });
 
     // Bắt mã lỗi đặc thù từ HANET Cloud
@@ -40,6 +41,19 @@ hanetQueue.process('register_person_job', 3, async (job) => {
       throw new Error('Mã lỗi -9008: Dung lượng lưu trữ Face ID cho địa điểm đã hết trên HANET Cloud');
     } else if (result.returnCode !== 1) {
       throw new Error(`HANET API Error [${result.returnCode}]: ${result.returnMessage}`);
+    }
+
+    // Nếu có chọn phòng ban, gán person vào phòng ban sau khi đăng ký thành công
+    if (departmentID) {
+      try {
+        const newPersonID = result.data?.id || result.data?.personID || result.data?.personId;
+        if (newPersonID) {
+          const addRes = await hanetService.addPersonsToDepartment(departmentID, newPersonID);
+          console.log(`[Queue register_person_job] Gán person ${newPersonID} vào phòng ban ${departmentID}: returnCode=${addRes.returnCode}`);
+        }
+      } catch (deptErr) {
+        console.warn(`[Queue register_person_job] Lỗi gán phòng ban ${departmentID}:`, deptErr.message);
+      }
     }
 
     return result;
@@ -72,9 +86,10 @@ hanetQueue.process('update_person_job', 3, async (job) => {
 
     // 2. Nếu có ảnh mới, cập nhật Face ID
     if (job.data.imageFilename) {
+      const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
       const faceResult = await hanetService.updateByFaceUrl({
         personID,
-        faceUrl: publicImageUrl || `http://your-domain.com/uploads/${job.data.imageFilename}`
+        faceUrl: publicImageUrl || `${fallbackBaseUrl}/uploads/${job.data.imageFilename}`
       });
 
       if (faceResult.returnCode === -9006) {
