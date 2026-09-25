@@ -103,16 +103,20 @@ exports.renderEditForm = async (req, res, next) => {
 exports.handleUpdate = async (req, res, next) => {
   try {
     const { personID } = req.params;
-    const { name, aliasID, title, base64_image } = req.body;
+    const { name, aliasID, title, departmentID, base64_image } = req.body;
 
-    let updatePayload = {
-      personID,
-      name,
-      aliasID,
-      title
-    };
+    // 1. Lấy thông tin person hiện tại để so sánh department
+    const listRes = await hanetService.getListByPlace();
+    const person = listRes?.data?.find(p => String(p.personID) === String(personID));
+    const oldDeptID = person?.departmentID && String(person.departmentID) !== '0'
+      ? String(person.departmentID)
+      : null;
+    const newDeptID = departmentID ? String(departmentID) : null;
 
-    // Nếu người dùng tải ảnh mới để cập nhật Face ID
+    console.log(`[handleUpdate] Person ${personID} | oldDept=${oldDeptID} → newDept=${newDeptID}`);
+
+    // 2. Cập nhật thông tin cơ bản + face nếu có (qua queue)
+    let updatePayload = { personID, name, aliasID, title };
     if (req.file || base64_image) {
       const processedImage = await imageService.processFaceImage({
         filePath: req.file ? req.file.path : null,
@@ -121,11 +125,39 @@ exports.handleUpdate = async (req, res, next) => {
       updatePayload.imagePath = processedImage.processedPath;
       updatePayload.imageFilename = processedImage.filename;
     }
-
-    // Đẩy tác vụ cập nhật vào Queue xử lý ngầm
     await queueService.enqueueUpdatePerson(updatePayload);
 
-    req.flash('success', `Yêu cầu cập nhật cho nhân sự ID "${personID}" đã được gửi vào hàng đợi đồng bộ Cloud.`);
+    // 3. Xử lý đổi phòng ban (chỉ khi user chọn phòng mới khác phòng cũ)
+    let deptMsg = '';
+    if (newDeptID && newDeptID !== oldDeptID) {
+      // 3a. Gỡ khỏi phòng cũ (nếu đang ở phòng nào đó)
+      if (oldDeptID) {
+        try {
+          const removeRes = await hanetService.removePersonsFromDepartment(oldDeptID, personID);
+          console.log(`[handleUpdate] Remove khỏi phòng ${oldDeptID}: returnCode=${removeRes.returnCode}`);
+        } catch (err) {
+          console.warn(`[handleUpdate] Không gỡ được khỏi phòng cũ ${oldDeptID}:`, err.message);
+        }
+      }
+
+      // 3b. Gán vào phòng mới
+      try {
+        const addRes = await hanetService.addPersonsToDepartment(newDeptID, personID);
+        console.log(`[handleUpdate] Add vào phòng ${newDeptID}: returnCode=${addRes.returnCode}`);
+        if (addRes.returnCode === 1) {
+          deptMsg = ` Đã chuyển sang phòng ban mới.`;
+        } else {
+          deptMsg = ` ⚠️ Gán phòng ban lỗi: ${addRes.returnMessage}`;
+        }
+      } catch (err) {
+        console.error(`[handleUpdate] Lỗi add-person:`, err.message);
+        deptMsg = ` ⚠️ Lỗi gán phòng ban: ${err.message}`;
+      }
+    } else if (newDeptID === oldDeptID && newDeptID) {
+      deptMsg = ' (Không thay đổi phòng ban).';
+    }
+
+    req.flash('success', `Đã cập nhật nhân sự "${name}".${deptMsg}`);
     res.redirect('/');
   } catch (err) {
     console.error('[Update Error]', err.message);
