@@ -1,0 +1,83 @@
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="fw-bold"><i class="bi bi-building text-primary me-2"></i>Quản lý Phòng ban (HANET Cloud)</h4>
+  <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createDeptModal">
+    <i class="bi bi-plus-circle me-1"></i>Thêm Phòng ban Mới
+  </button>
+</div>
+
+<div class="card shadow-sm border-0">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-dark">
+        <tr>
+          <th>#</th>
+          <th>ID Cloud</th>
+          <th>Tên Phòng ban</th>
+          <th>Mô tả</th>
+          <th>Số Nhân sự</th>
+          <th class="text-center">Thao tác</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (departments.length === 0) { %>
+          <tr><td colspan="6" class="text-center text-muted py-4">Chưa có phòng ban nào trên Cloud.</td></tr>
+        <% } %>
+        <% departments.forEach((dept, index) => { %>
+          <tr>
+            <td><%= index + 1 %></td>
+            <td><code><%= dept.id %></code></td>
+            <td class="fw-bold text-primary"><%= dept.name %></td>
+            <td><%= dept.desc || dept.description || '—' %></td>
+            <td>
+              <span class="badge bg-info text-dark">
+                <i class="bi bi-people-fill me-1"></i><%= dept.numEmployee || dept.num_employee || 0 %>
+              </span>
+            </td>
+            <td class="text-center">
+              <a href="/departments/<%= dept.id %>/members" class="btn btn-sm btn-outline-primary me-1" title="Xem & Quản lý Thành viên">
+                <i class="bi bi-people me-1"></i>Thành viên
+              </a>
+              <form method="POST" action="/departments/delete/<%= dept.id %>?_method=DELETE" class="d-inline" onsubmit="return confirm('Bạn có chắc chắn muốn xóa phòng ban này?');">
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="Xóa phòng ban">
+                  <i class="bi bi-trash-fill me-1"></i>Xóa
+                </button>
+              </form>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Modal Tạo Phòng ban -->
+<div class="modal fade" id="createDeptModal" tabindex="-1" aria-labelledby="createDeptModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content border-0 shadow">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title" id="createDeptModalLabel">
+          <i class="bi bi-plus-circle me-2"></i>Thêm Phòng ban Mới
+        </h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form method="POST" action="/departments/create">
+        <div class="modal-body p-4">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Tên Phòng ban (*)</label>
+            <input type="text" name="name" class="form-control" placeholder="Ví dụ: Phòng Kỹ thuật" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Mô tả</label>
+            <textarea name="desc" class="form-control" rows="3" placeholder="Mô tả chức năng hoặc nhiệm vụ của phòng ban..."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer bg-light">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Hủy</button>
+          <button type="submit" class="btn btn-primary fw-bold">
+            <i class="bi bi-cloud-plus me-1"></i>Tạo Phòng ban
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

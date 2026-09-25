@@ -12,6 +12,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const personRoutes = require('./routes/personRoutes');
+const departmentRoutes = require('./routes/departmentRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -63,6 +64,7 @@ app.use((req, res, next) => {
 });
 
 // Mount Routes
+app.use('/departments', departmentRoutes);
 app.use('/', personRoutes);
 
 // Health check endpoint
