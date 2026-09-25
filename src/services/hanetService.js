@@ -7,12 +7,20 @@ class HanetService {
     this.oauthBase = process.env.HANET_OAUTH_BASE || 'https://oauth.hanet.com';
     this.clientId = process.env.HANET_CLIENT_ID;
     this.clientSecret = process.env.HANET_CLIENT_SECRET;
-    this.placeId = process.env.HANET_PLACE_ID;
 
     // Ưu tiên sử dụng Token tĩnh từ biến môi trường (nếu có)
     this.envAccessToken = process.env.HANET_ACCESS_TOKEN || null;
     this.accessToken = this.envAccessToken;
     this.tokenExpiry = null;
+  }
+
+  // Getter động - luôn đọc giá trị mới nhất từ process.env tại thời điểm gọi
+  get placeId() {
+    const pId = process.env.HANET_PLACE_ID;
+    if (!pId) {
+      console.warn('[HanetService] CẢNH BÁO: HANET_PLACE_ID chưa được định nghĩa trong .env!');
+    }
+    return pId;
   }
 
   // Tự động quản lý, ưu tiên token cấu hình và xoay vòng OAuth2 Token
@@ -160,7 +168,7 @@ class HanetService {
   async updateDepartment(departmentID, name, desc = '') {
     return this.postWithToken('/department/update', {
       placeID: this.placeId,
-      departmentID,
+      id: departmentID,
       name,
       desc
     });
@@ -170,7 +178,7 @@ class HanetService {
   async removeDepartment(departmentID) {
     return this.postWithToken('/department/remove', {
       placeID: this.placeId,
-      departmentID
+      id: departmentID
     });
   }
 
@@ -200,7 +208,7 @@ class HanetService {
     return this.postWithToken('/department/remove-person', {
       placeID: this.placeId,
       departmentID,
-      personIDs: formattedPersonIDs
+      personID: formattedPersonIDs
     });
   }
 }
