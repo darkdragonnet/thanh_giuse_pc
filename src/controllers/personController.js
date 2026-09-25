@@ -19,8 +19,21 @@ exports.listPersons = async (req, res, next) => {
 };
 
 // [CREATE] Render Form Đăng ký
-exports.renderRegisterForm = (req, res) => {
-  res.render('person/register', { title: 'Đăng ký Face ID Nhân sự' });
+exports.renderRegisterForm = async (req, res) => {
+  try {
+    const deptRes = await hanetService.getDepartmentList();
+    const departments = deptRes?.data?.hits || [];
+    res.render('person/register', {
+      title: 'Đăng ký Face ID Nhân sự',
+      departments
+    });
+  } catch (err) {
+    console.error('[renderRegisterForm Error]', err.message);
+    res.render('person/register', {
+      title: 'Đăng ký Face ID Nhân sự',
+      departments: []
+    });
+  }
 };
 
 // [CREATE] Xử lý Đăng ký Nhân sự mới
@@ -59,9 +72,14 @@ exports.handleRegister = async (req, res, next) => {
 exports.renderEditForm = async (req, res, next) => {
   try {
     const { personID } = req.params;
-    // Đọc danh sách từ Cloud và tìm nhân sự tương ứng
-    const result = await hanetService.getListByPlace();
-    const persons = result?.data || [];
+    // Đọc song song danh sách nhân sự và danh sách phòng ban từ Cloud
+    const [personRes, deptRes] = await Promise.all([
+      hanetService.getListByPlace(),
+      hanetService.getDepartmentList()
+    ]);
+
+    const persons = personRes?.data || [];
+    const departments = deptRes?.data?.hits || [];
     const person = persons.find(p => String(p.id || p.personID) === String(personID));
 
     if (!person) {
@@ -71,7 +89,8 @@ exports.renderEditForm = async (req, res, next) => {
 
     res.render('person/edit', {
       title: `Chỉnh sửa: ${person.name}`,
-      person
+      person,
+      departments
     });
   } catch (err) {
     console.error('[Edit Form Error]', err.message);

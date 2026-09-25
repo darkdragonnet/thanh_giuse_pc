@@ -24,6 +24,21 @@
           </div>
 
           <div class="mb-3">
+            <label class="form-label fw-semibold">Phòng ban</label>
+            <select name="departmentID" class="form-select">
+              <option value="">-- Chưa gán phòng ban --</option>
+              <% if (typeof departments !== 'undefined' && departments.length > 0) { %>
+                <% departments.forEach(dept => { %>
+                  <% const isSelected = String(person.departmentID || person.department_id) === String(dept.id); %>
+                  <option value="<%= dept.id %>" <%= isSelected ? 'selected' : '' %>>
+                    <%= dept.name %> (<%= dept.numEmployee || dept.num_employee || 0 %> thành viên)
+                  </option>
+                <% }) %>
+              <% } %>
+            </select>
+          </div>
+
+          <div class="mb-3">
             <label class="form-label fw-semibold">Ảnh Face ID hiện tại</label>
             <div class="mb-2">
               <img src="<%= person.avatar || 'https://via.placeholder.com/100' %>" class="rounded border" style="width: 100px; height: 100px; object-fit: cover;">

@@ -19,6 +19,21 @@
             <input type="text" name="title" class="form-control" placeholder="Chuyên viên HR">
           </div>
 
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Phòng ban (Tùy chọn)</label>
+            <select name="departmentID" class="form-select">
+              <option value="">-- Chưa gán phòng ban --</option>
+              <% if (typeof departments !== 'undefined' && departments.length > 0) { %>
+                <% departments.forEach(dept => { %>
+                  <option value="<%= dept.id %>">
+                    <%= dept.name %> (<%= dept.numEmployee || dept.num_employee || 0 %> thành viên)
+                  </option>
+                <% }) %>
+              <% } %>
+            </select>
+            <div class="form-text text-muted">Có thể gán sau trong mục Quản lý Phòng ban.</div>
+          </div>
+
           <div class="mb-4">
             <label class="form-label fw-semibold">Ảnh Khuôn mặt (*)</label>
             <!-- capture="user" giúp bật ngay camera trước trên Zalo / Safari / Chrome Android -->
