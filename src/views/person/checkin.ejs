@@ -1,0 +1,48 @@
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="fw-bold"><i class="bi bi-clock-history text-primary me-2"></i>Lịch sử Check-in Real-time (Tháng hiện tại)</h4>
+  <a href="/checkin" class="btn btn-outline-primary btn-sm"><i class="bi bi-arrow-clockwise me-1"></i>Làm mới</a>
+</div>
+
+<div class="card shadow-sm border-0">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>#</th>
+          <th>Ảnh Check-in</th>
+          <th>Họ tên</th>
+          <th>Mã NV (Alias)</th>
+          <th>Thời gian</th>
+          <th>Thiết bị</th>
+          <th>Khẩu trang</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (logs.length === 0) { %>
+          <tr><td colspan="7" class="text-center text-muted py-4">Không có dữ liệu check-in trong tháng này.</td></tr>
+        <% } %>
+        <% logs.forEach((item, idx) => { %>
+          <tr>
+            <td><%= idx + 1 %></td>
+            <td>
+              <img src="<%= item.avatar || item.detected_image_url || 'https://via.placeholder.com/40' %>" class="rounded border" style="width: 44px; height: 44px; object-fit: cover;">
+            </td>
+            <td class="fw-bold"><%= item.personName || 'Khách' %></td>
+            <td><code><%= item.aliasID || '—' %></code></td>
+            <td><%= item.date || new Date(item.checkinTime).toLocaleString('vi-VN') %></td>
+            <td><%= item.deviceName || item.deviceID %></td>
+            <td>
+              <% if (item.mask === 2) { %>
+                <span class="badge bg-success">Có khẩu trang</span>
+              <% } else if (item.mask === 0) { %>
+                <span class="badge bg-warning text-dark">Không khẩu trang</span>
+              <% } else { %>
+                <span class="badge bg-secondary">Chưa bật</span>
+              <% } %>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>

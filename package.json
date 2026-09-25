@@ -1,0 +1,31 @@
+{
+  "name": "hanet-cloud-first-app",
+  "version": "1.0.0",
+  "description": "Ung dung Cloud-First quan ly Face ID va Checkin qua HANET AI Camera",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "bull": "^4.16.3",
+    "connect-flash": "^0.1.1",
+    "connect-redis": "^8.0.1",
+    "dotenv": "^16.4.5",
+    "ejs": "^3.1.10",
+    "express": "^4.19.2",
+    "express-ejs-layouts": "^2.5.1",
+    "express-session": "^1.18.1",
+    "ioredis": "^5.4.1",
+    "method-override": "^3.0.0",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "qs": "^6.13.0",
+    "redis": "^4.7.0",
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}

@@ -1,0 +1,132 @@
+const axios = require('axios');
+const qs = require('qs');
+
+class HanetService {
+  constructor() {
+    this.apiBase = process.env.HANET_API_BASE || 'https://partner.hanet.ai';
+    this.oauthBase = process.env.HANET_OAUTH_BASE || 'https://oauth.hanet.com';
+    this.clientId = process.env.HANET_CLIENT_ID;
+    this.clientSecret = process.env.HANET_CLIENT_SECRET;
+    this.placeId = process.env.HANET_PLACE_ID;
+
+    // Ưu tiên sử dụng Token tĩnh từ biến môi trường (nếu có)
+    this.envAccessToken = process.env.HANET_ACCESS_TOKEN || null;
+    this.accessToken = this.envAccessToken;
+    this.tokenExpiry = null;
+  }
+
+  // Tự động quản lý, ưu tiên token cấu hình và xoay vòng OAuth2 Token
+  async getAccessToken(forceRefresh = false) {
+    if (!forceRefresh && this.accessToken) {
+      // Nếu có tokenExpiry và chưa hết hạn, hoặc dùng token tĩnh chưa bị đánh dấu hết hạn
+      if (!this.tokenExpiry || new Date() < this.tokenExpiry) {
+        return this.accessToken;
+      }
+    }
+
+    // Nếu cần làm mới token hoặc token hết hạn, gọi OAuth2 nếu có Client ID & Client Secret
+    if (this.clientId && this.clientSecret) {
+      try {
+        const res = await axios.post(
+          `${this.oauthBase}/token`,
+          qs.stringify({
+            grant_type: 'client_credentials',
+            client_id: this.clientId,
+            client_secret: this.clientSecret
+          }),
+          { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+        );
+
+        this.accessToken = res.data.access_token;
+        this.tokenExpiry = new Date(Date.now() + ((res.data.expires_in || 3600) - 300) * 1000);
+        return this.accessToken;
+      } catch (err) {
+        throw new Error(`[HANET OAuth Error] Không thể lấy Access Token: ${err.response?.data?.error_description || err.message}`);
+      }
+    }
+
+    // Nếu không có Client credentials nhưng có envAccessToken
+    if (this.accessToken) {
+      return this.accessToken;
+    }
+
+    throw new Error('[HANET Config Error] Vui lòng cấu hình HANET_ACCESS_TOKEN hoặc cặp HANET_CLIENT_ID / HANET_CLIENT_SECRET trong .env');
+  }
+
+  // Helper gửi request tự động retry xoay vòng token khi gặp mã lỗi -103 (ACCESS_TOKEN_EXPIRE)
+  async postWithToken(endpoint, data = {}, isRetry = false) {
+    const token = await this.getAccessToken(isRetry);
+    const payload = { ...data, token };
+
+    const res = await axios.post(`${this.apiBase}${endpoint}`, qs.stringify(payload), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+
+    // Kiểm tra nếu mã lỗi là -103 (Token hết hạn) và chưa retry
+    if (res.data && res.data.returnCode === -103 && !isRetry) {
+      console.warn('[HANET Service] Access token đã hết hạn (Mã -103). Đang tự động xoay vòng lấy token mới qua OAuth2...');
+      return this.postWithToken(endpoint, data, true);
+    }
+
+    return res.data;
+  }
+
+  // Đăng ký nhân sự kèm ảnh
+  async registerPerson(data) {
+    const payload = {
+      placeID: this.placeId,
+      name: data.name,
+      aliasID: data.aliasID,
+      title: data.title || 'Nhân viên',
+      faceUrl: data.faceUrl
+    };
+    return this.postWithToken('/person/registerByUrl', payload);
+  }
+
+  // Cập nhật thông tin nhân sự (Name, AliasID, Title)
+  async updateInfo(data) {
+    const payload = {
+      placeID: this.placeId,
+      personID: data.personID,
+      aliasID: data.aliasID,
+      name: data.name,
+      title: data.title || 'Nhân viên'
+    };
+    return this.postWithToken('/person/updateInfo', payload);
+  }
+
+  // Cập nhật Face ID cho nhân sự qua faceUrl
+  async updateByFaceUrl(data) {
+    const payload = {
+      placeID: this.placeId,
+      personID: data.personID,
+      faceUrl: data.faceUrl
+    };
+    return this.postWithToken('/person/updateByFaceUrl', payload);
+  }
+
+  // Lấy danh sách nhân sự trực tiếp từ Cloud
+  async getListByPlace() {
+    return this.postWithToken('/person/getListByPlace', { placeID: this.placeId });
+  }
+
+  // Lấy dữ liệu Check-in theo timestamp (Ràng buộc: cùng 1 tháng dương lịch)
+  async getCheckinByTimestamp(fromTimestamp, toTimestamp) {
+    return this.postWithToken('/person/getCheckinByPlaceIdInTimestamp', {
+      placeID: this.placeId,
+      from: fromTimestamp,
+      to: toTimestamp,
+      size: 500
+    });
+  }
+
+  // Xóa nhân sự trên Cloud
+  async removePerson(personID) {
+    return this.postWithToken('/person/removePersonByID', {
+      placeID: this.placeId,
+      personID
+    });
+  }
+}
+
+module.exports = new HanetService();

@@ -1,0 +1,50 @@
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="fw-bold"><i class="bi bi-people-fill text-primary me-2"></i>Danh sách Nhân sự (HANET Cloud)</h4>
+  <a href="/register" class="btn btn-primary"><i class="bi bi-plus-circle me-1"></i>Thêm mới Face ID</a>
+</div>
+
+<div class="card shadow-sm border-0">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-dark">
+        <tr>
+          <th>#</th>
+          <th>Ảnh Face</th>
+          <th>Mã NV (Alias)</th>
+          <th>Họ và tên</th>
+          <th>Chức vụ</th>
+          <th>Cloud Person ID</th>
+          <th class="text-center">Thao tác</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (persons.length === 0) { %>
+          <tr><td colspan="7" class="text-center text-muted py-4">Chưa có dữ liệu nhân sự trên Cloud HANET.</td></tr>
+        <% } %>
+        <% persons.forEach((p, index) => { %>
+          <% const pID = p.id || p.personID; %>
+          <tr>
+            <td><%= index + 1 %></td>
+            <td>
+              <img src="<%= p.avatar || 'https://via.placeholder.com/48' %>" class="rounded-circle border" style="width: 48px; height: 48px; object-fit: cover;">
+            </td>
+            <td><span class="badge bg-secondary"><%= p.aliasID || p.alias_id || '—' %></span></td>
+            <td class="fw-bold text-primary"><%= p.name %></td>
+            <td><%= p.title || 'Nhân viên' %></td>
+            <td><code><%= pID %></code></td>
+            <td class="text-center">
+              <a href="/edit/<%= pID %>" class="btn btn-sm btn-outline-warning me-1" title="Chỉnh sửa thông tin">
+                <i class="bi bi-pencil-square"></i> Sửa
+              </a>
+              <form method="POST" action="/delete/<%= pID %>?_method=DELETE" class="d-inline" onsubmit="return confirm('Bạn có chắc chắn muốn xóa nhân sự này khỏi Cloud HANET không?');">
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="Xóa khỏi Cloud">
+                  <i class="bi bi-trash-fill"></i> Xóa
+                </button>
+              </form>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>

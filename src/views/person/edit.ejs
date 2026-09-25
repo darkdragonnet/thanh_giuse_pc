@@ -1,0 +1,46 @@
+<div class="row justify-content-center">
+  <div class="col-md-8 col-lg-6">
+    <div class="card shadow-sm border-0">
+      <div class="card-header bg-warning text-dark py-3">
+        <h5 class="mb-0"><i class="bi bi-pencil-square me-2"></i>Cập nhật Thông tin Nhân sự trên Cloud</h5>
+      </div>
+      <div class="card-body p-4">
+        <form method="POST" action="/update/<%= person.id || person.personID %>?_method=PUT" enctype="multipart/form-data">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Cloud Person ID</label>
+            <input type="text" class="form-control bg-light" value="<%= person.id || person.personID %>" readonly>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Mã NV / Alias ID (*)</label>
+            <input type="text" name="aliasID" class="form-control" value="<%= person.aliasID || person.alias_id || '' %>" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Họ và Tên (*)</label>
+            <input type="text" name="name" class="form-control" value="<%= person.name %>" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Chức vụ</label>
+            <input type="text" name="title" class="form-control" value="<%= person.title || 'Nhân viên' %>">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Ảnh Face ID hiện tại</label>
+            <div class="mb-2">
+              <img src="<%= person.avatar || 'https://via.placeholder.com/100' %>" class="rounded border" style="width: 100px; height: 100px; object-fit: cover;">
+            </div>
+            <label class="form-label fw-semibold text-primary">Tải ảnh mới để thay thế (Tùy chọn)</label>
+            <input type="file" name="face_image" accept="image/*" capture="user" class="form-control">
+            <div class="form-text text-muted">Bỏ trống nếu chỉ muốn cập nhật thông tin tên/chức vụ/alias.</div>
+          </div>
+
+          <div class="d-flex justify-content-between gap-2">
+            <a href="/" class="btn btn-outline-secondary w-50 py-2">Hủy bỏ</a>
+            <button type="submit" class="btn btn-warning w-50 py-2 fw-bold">
+              <i class="bi bi-cloud-arrow-up-fill me-1"></i>Lưu thay đổi
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>

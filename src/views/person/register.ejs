@@ -1,0 +1,38 @@
+<div class="row justify-content-center">
+  <div class="col-md-8 col-lg-6">
+    <div class="card shadow-sm border-0">
+      <div class="card-header bg-primary text-white py-3">
+        <h5 class="mb-0"><i class="bi bi-person-plus-fill me-2"></i>Đăng ký Face ID Nhân sự</h5>
+      </div>
+      <div class="card-body p-4">
+        <form method="POST" action="/register" enctype="multipart/form-data">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Mã NV / Alias ID (*)</label>
+            <input type="text" name="aliasID" class="form-control" placeholder="Ví dụ: NV_001" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Họ và Tên (*)</label>
+            <input type="text" name="name" class="form-control" placeholder="Nguyễn Văn A" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Chức vụ</label>
+            <input type="text" name="title" class="form-control" placeholder="Chuyên viên HR">
+          </div>
+
+          <div class="mb-4">
+            <label class="form-label fw-semibold">Ảnh Khuôn mặt (*)</label>
+            <!-- capture="user" giúp bật ngay camera trước trên Zalo / Safari / Chrome Android -->
+            <input type="file" name="face_image" accept="image/*" capture="user" class="form-control" required>
+            <div class="form-text text-muted">
+              Ảnh chính diện, rõ nét, nhìn thẳng, không đeo khẩu trang/kính râm.
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary w-100 py-2 fw-bold">
+            <i class="bi bi-cloud-upload me-2"></i>Đăng ký & Gửi lên HANET Cloud
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
