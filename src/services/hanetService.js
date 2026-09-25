@@ -71,6 +71,10 @@ class HanetService {
     return res.data;
   }
 
+  /* =========================================================================
+   * PERSON APIs
+   * ========================================================================= */
+
   // Đăng ký nhân sự kèm ảnh
   async registerPerson(data) {
     const payload = {
@@ -125,6 +129,78 @@ class HanetService {
     return this.postWithToken('/person/removePersonByID', {
       placeID: this.placeId,
       personID
+    });
+  }
+
+  /* =========================================================================
+   * DEPARTMENT APIs
+   * ========================================================================= */
+
+  // Lấy danh sách phòng ban
+  async getDepartmentList(page = 1, size = 100, keyword = '') {
+    const payload = {
+      placeID: this.placeId,
+      page,
+      size
+    };
+    if (keyword) payload.keyword = keyword;
+    return this.postWithToken('/department/list', payload);
+  }
+
+  // Tạo mới phòng ban
+  async createDepartment(name, desc = '') {
+    return this.postWithToken('/department/create', {
+      placeID: this.placeId,
+      name,
+      desc
+    });
+  }
+
+  // Cập nhật phòng ban
+  async updateDepartment(departmentID, name, desc = '') {
+    return this.postWithToken('/department/update', {
+      placeID: this.placeId,
+      departmentID,
+      name,
+      desc
+    });
+  }
+
+  // Xóa phòng ban
+  async removeDepartment(departmentID) {
+    return this.postWithToken('/department/remove', {
+      placeID: this.placeId,
+      departmentID
+    });
+  }
+
+  // Lấy danh sách nhân sự thuộc phòng ban
+  async getPersonsByDepartment(departmentID, page = 1, size = 50) {
+    return this.postWithToken('/department/list-person', {
+      placeID: this.placeId,
+      departmentID,
+      page,
+      size
+    });
+  }
+
+  // Thêm nhân sự vào phòng ban
+  async addPersonsToDepartment(departmentID, personIDs) {
+    const formattedPersonIDs = Array.isArray(personIDs) ? personIDs.join(',') : String(personIDs);
+    return this.postWithToken('/department/add-person', {
+      placeID: this.placeId,
+      departmentID,
+      personIDs: formattedPersonIDs
+    });
+  }
+
+  // Xóa nhân sự khỏi phòng ban
+  async removePersonsFromDepartment(departmentID, personIDs) {
+    const formattedPersonIDs = Array.isArray(personIDs) ? personIDs.join(',') : String(personIDs);
+    return this.postWithToken('/department/remove-person', {
+      placeID: this.placeId,
+      departmentID,
+      personIDs: formattedPersonIDs
     });
   }
 }
