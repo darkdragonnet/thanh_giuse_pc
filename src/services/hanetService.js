@@ -90,13 +90,18 @@ class HanetService {
     const token = await this.getAccessToken(isRetry);
     const formData = new FormData();
 
+    const cleanAliasID = String(data.aliasID || '').trim().replace(/\s+/g, '_');
+    const cleanName = String(data.name || '').trim();
+    const cleanTitle = String(data.title || 'Nhân viên').trim();
+    const cleanDepartmentID = String(data.departmentID || '').trim();
+
     // Đưa token vào form-data body thay vì HTTP Header
     formData.append('token', token);
     formData.append('placeID', this.placeId);
-    formData.append('name', data.name);
-    formData.append('aliasID', data.aliasID);
-    formData.append('title', data.title || 'Nhân viên');
-    formData.append('departmentID', data.departmentID || '');
+    formData.append('name', cleanName);
+    formData.append('aliasID', cleanAliasID);
+    formData.append('title', cleanTitle);
+    formData.append('departmentID', cleanDepartmentID);
 
     // Đọc file ảnh từ local path và đính kèm binary stream (field name: 'image')
     if (data.imagePath && fs.existsSync(data.imagePath)) {
@@ -106,11 +111,13 @@ class HanetService {
     }
 
     try {
-      // Gửi request với headers của form-data (không cần truyền token qua headers nữa)
+      // Gửi request với headers của form-data và vô hiệu hóa giới hạn kích thước body/content
       const response = await axios.post(`${this.apiBase}/person/register`, formData, {
         headers: {
           ...formData.getHeaders()
-        }
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity
       });
 
       // Kiểm tra token hết hạn (Mã -103) và xoay vòng
