@@ -90,13 +90,13 @@ class HanetService {
     const token = await this.getAccessToken(isRetry);
     const formData = new FormData();
 
+    // Đưa token vào form-data body thay vì HTTP Header
+    formData.append('token', token);
     formData.append('placeID', this.placeId);
     formData.append('name', data.name);
     formData.append('aliasID', data.aliasID);
     formData.append('title', data.title || 'Nhân viên');
-    if (data.departmentID) {
-      formData.append('departmentID', data.departmentID);
-    }
+    formData.append('departmentID', data.departmentID || '');
 
     // Đọc file ảnh từ local path và đính kèm binary stream
     if (data.imagePath && fs.existsSync(data.imagePath)) {
@@ -105,11 +105,10 @@ class HanetService {
       throw new Error('[HanetService] Không tìm thấy file ảnh tại đường dẫn để upload.');
     }
 
-    // Gọi endpoint đăng ký trực tiếp bằng file của HANET
+    // Gửi request với headers của form-data (không cần truyền token qua headers nữa)
     const response = await axios.post(`${this.apiBase}/person/register`, formData, {
       headers: {
-        ...formData.getHeaders(),
-        token: token
+        ...formData.getHeaders()
       }
     });
 
