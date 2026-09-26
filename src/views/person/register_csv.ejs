@@ -1,0 +1,365 @@
+<div class="container py-3" style="max-width: 600px;">
+  <div class="card shadow-sm border-0 rounded-3">
+    <div class="card-header bg-primary text-white text-center py-3">
+      <h5 class="mb-0 fw-bold"><i class="bi bi-person-bounding-box me-2"></i>ĐĂNG KÝ FACE ID</h5>
+      <small class="opacity-75">Giáo xứ Thánh Giuse — Danh mục: <%= fileName %></small>
+    </div>
+
+    <div class="card-body p-3 p-md-4">
+      <form id="registerForm" method="POST" action="/register" enctype="multipart/form-data">
+        <input type="hidden" name="source_csv" value="<%= fileName %>">
+
+        <!-- Ô Tìm kiếm & Dropdown gợi ý với bullet ảnh -->
+        <div class="mb-3 position-relative">
+          <label class="form-label fw-bold text-dark">Họ và Tên</label>
+          <div class="input-group">
+            <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+            <input class="form-control form-control-lg" id="hoTenInput" name="name" placeholder="Gõ để tìm hoặc nhập tên mới..." required autocomplete="off">
+          </div>
+          
+          <!-- Dropdown danh sách gợi ý hiển thị Bullet ảnh -->
+          <ul id="suggestList" class="dropdown-menu w-100 shadow-sm mt-1" style="max-height: 280px; overflow-y: auto; display: none;">
+            <% (csvList || []).forEach(item => { 
+                 // Làm sạch URL nếu dính format markdown [url](url)
+                 let cleanImgUrl = (item.anh_url || '').trim();
+                 const mdMatch = cleanImgUrl.match(/\((https?:\/\/[^\s)]+)\)/);
+                 if (mdMatch) {
+                   cleanImgUrl = mdMatch[1];
+                 } else {
+                   cleanImgUrl = cleanImgUrl.replace(/[\[\]"']/g, '').trim();
+                 }
+            %>
+              <li class="dropdown-item py-2 d-flex align-items-center cursor-pointer suggest-item"
+                  data-name="<%= item.ho_ten %>"
+                  data-phong="<%= item.phong_ban %>"
+                  data-lop="<%= item.lop %>"
+                  data-chucvu="<%= item.chuc_vu %>"
+                  data-anh="<%= cleanImgUrl %>"
+                  data-hanetid="<%= item.hanet_person_id %>">
+                <% if (cleanImgUrl) { %>
+                  <img src="<%= cleanImgUrl %>" 
+                       class="rounded me-2 flex-shrink-0" 
+                       style="width: 26px; height: 26px; object-fit: cover; border: 1px solid #dee2e6;" 
+                       alt="bullet"
+                       onerror="this.onerror=null; this.outerHTML='<span class=\'badge bg-secondary-subtle text-secondary rounded-circle me-2 d-inline-flex align-items-center justify-content-center\' style=\'width: 26px; height: 26px; font-size: 11px;\'><i class=\'bi bi-person\'></i></span>';">
+                <% } else { %>
+                  <span class="badge bg-secondary-subtle text-secondary rounded-circle me-2 d-inline-flex align-items-center justify-content-center" style="width: 26px; height: 26px; font-size: 11px;">
+                    <i class="bi bi-person"></i>
+                  </span>
+                <% } %>
+                <div class="text-truncate">
+                  <span class="fw-semibold text-dark"><%= item.ho_ten %></span>
+                  <small class="text-muted ms-1">(<%= item.lop || item.phong_ban %>)</small>
+                </div>
+                <% if (item.hanet_person_id || cleanImgUrl) { %>
+                  <span class="badge bg-success-subtle text-success ms-auto small">Đã có Face ID</span>
+                <% } %>
+              </li>
+            <% }) %>
+          </ul>
+
+          <div id="statusAlert" class="mt-2" style="display:none;"></div>
+        </div>
+
+        <!-- Các thông tin phòng ban, lớp, chức vụ (Cố định theo file) -->
+        <div class="row g-2 mb-3">
+          <div class="col-6">
+            <label class="form-label small fw-semibold text-secondary">Phòng ban</label>
+            <input type="text" id="phongBanInput" name="departmentName" class="form-control bg-light" readonly>
+            <input type="hidden" id="departmentIdInput" name="departmentID">
+          </div>
+          <div class="col-6">
+            <label class="form-label small fw-semibold text-secondary">Lớp (Cột 2)</label>
+            <input type="text" id="lopInput" name="lop" class="form-control bg-light" readonly>
+          </div>
+        </div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-6">
+            <label class="form-label small fw-semibold text-secondary">Chức vụ</label>
+            <input type="text" id="chucVuInput" name="title" class="form-control bg-light" readonly>
+          </div>
+          <div class="col-6">
+            <label class="form-label small fw-semibold text-secondary">Mã NV (Độc bản)</label>
+            <input type="text" id="aliasIdInput" name="aliasID" class="form-control bg-light" required readonly>
+          </div>
+        </div>
+
+        <!-- KHU VỰC CHỤP ẢNH BẰNG CAMERA -->
+        <div class="mb-4" id="cameraSection">
+          <label class="form-label fw-bold text-danger d-flex align-items-center justify-content-between">
+            <span><i class="bi bi-camera-fill me-1"></i>Chụp ảnh khuôn mặt</span>
+            <button type="button" id="btnToggleCamera" class="btn btn-sm btn-outline-danger">
+              <i class="bi bi-webcam me-1"></i>Bật Camera Trực Tiếp
+            </button>
+          </label>
+
+          <!-- Khung Camera Live Stream -->
+          <div id="cameraPreviewBox" class="border rounded bg-dark p-2 text-center mb-2" style="display: none;">
+            <video id="videoFeed" autoplay playsinline class="w-100 rounded" style="max-height: 280px; object-fit: cover;"></video>
+            <div class="mt-2">
+              <button type="button" id="btnSnap" class="btn btn-warning fw-bold px-4">
+                <i class="bi bi-camera-fill me-1"></i>Chụp Ngay
+              </button>
+              <button type="button" id="btnStopCamera" class="btn btn-secondary ms-2">Hủy</button>
+            </div>
+          </div>
+          <canvas id="canvasSnap" style="display: none;"></canvas>
+
+          <!-- Ảnh chụp xem trước -->
+          <div id="capturedPreviewBox" class="text-center p-2 border rounded bg-light mb-2" style="display: none;">
+            <img id="capturedImg" src="" class="rounded shadow-sm" style="max-height: 200px; max-width: 100%; object-fit: contain;">
+            <div class="mt-2">
+              <button type="button" id="btnRetake" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-arrow-counterclockwise me-1"></i>Chụp lại
+              </button>
+            </div>
+          </div>
+
+          <!-- Nút chọn file/camera native cho Zalo Mobile -->
+          <div id="fileInputContainer">
+            <input type="file" class="form-control form-control-lg" name="face_image" id="avatarInput" accept="image/*" capture="user">
+            <div class="form-text small text-muted">
+              <i class="bi bi-info-circle me-1"></i>Bấm nút trên để chụp trực tiếp hoặc bấm vào ô này để mở Camera điện thoại (Zalo/Webview).
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" id="btnSubmit" class="btn btn-primary btn-lg w-100 py-3 fw-bold shadow-sm">
+          <i class="bi bi-cloud-arrow-up-fill me-1"></i> HOÀN TẤT ĐĂNG KÝ
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+  const rawList = <%- JSON.stringify(csvList || []) %>;
+  const deptMap = {
+    'Thiếu Nhi': '990653',
+    'Legiô Mariae': '990730',
+    'Giới Trẻ': '990731'
+  };
+
+  // Xác định thông tin Group mặc định của File CSV
+  const firstItem = rawList.find(x => x.phong_ban) || {};
+  const lastItem = rawList.length > 0 ? rawList[rawList.length - 1] : {};
+
+  const DEFAULT_DEPT = firstItem.phong_ban || 'Thiếu Nhi';
+  // Cột 2 (Lớp) của file
+  const DEFAULT_CLASS = firstItem.lop || '';
+  // Chức vụ lấy từ người cuối cùng trong danh sách
+  const DEFAULT_TITLE = lastItem.chuc_vu || 'Học Sinh';
+
+  // Elements
+  const hoTenInput = document.getElementById('hoTenInput');
+  const suggestList = document.getElementById('suggestList');
+  const phongBanInput = document.getElementById('phongBanInput');
+  const deptIdInput = document.getElementById('departmentIdInput');
+  const lopInput = document.getElementById('lopInput');
+  const chucVuInput = document.getElementById('chucVuInput');
+  const aliasIdInput = document.getElementById('aliasIdInput');
+  const statusAlert = document.getElementById('statusAlert');
+  const cameraSection = document.getElementById('cameraSection');
+  const btnSubmit = document.getElementById('btnSubmit');
+
+  // Camera elements
+  const btnToggleCamera = document.getElementById('btnToggleCamera');
+  const btnStopCamera = document.getElementById('btnStopCamera');
+  const btnSnap = document.getElementById('btnSnap');
+  const btnRetake = document.getElementById('btnRetake');
+  const cameraPreviewBox = document.getElementById('cameraPreviewBox');
+  const capturedPreviewBox = document.getElementById('capturedPreviewBox');
+  const videoFeed = document.getElementById('videoFeed');
+  const canvasSnap = document.getElementById('canvasSnap');
+  const capturedImg = document.getElementById('capturedImg');
+  const avatarInput = document.getElementById('avatarInput');
+
+  let mediaStream = null;
+
+  // 1. Chuẩn hóa tiếng Việt bỏ dấu
+  function removeVietnameseTones(str) {
+    if (!str) return '';
+    return str
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd').replace(/Đ/g, 'D')
+      .trim();
+  }
+
+  // 2. Ký tự đầu từng từ của Phòng Ban
+  function getDeptAcronym(deptName) {
+    const clean = removeVietnameseTones(deptName || DEFAULT_DEPT);
+    return clean
+      .split(/\s+/)
+      .map(w => w.charAt(0).toUpperCase())
+      .join('');
+  }
+
+  // 3. Tên lớp ĐẦY ĐỦ của Cột 2 (chỉ bỏ dấu tiếng Việt và khoảng trắng, không cắt bớt)
+  function getFullCleanClass(className) {
+    const rawClass = className || DEFAULT_CLASS || 'Chung';
+    const clean = removeVietnameseTones(rawClass);
+    return clean.replace(/\s+/g, '');
+  }
+
+  // 4. Sinh Mã NV: [PhòngBanKýTựĐầu]_[TênLớpCột2ĐầyĐủ]_[TokenĐộcBản]
+  function generateUniqueAlias(deptName, className) {
+    const deptPrefix = getDeptAcronym(deptName);
+    const classFull = getFullCleanClass(className);
+    const token = Date.now().toString(36).slice(-4).toUpperCase();
+    return `${deptPrefix}_${classFull}_${token}`;
+  }
+
+  // Khởi tạo mặc định form ban đầu
+  function initDefaultGroup() {
+    phongBanInput.value = DEFAULT_DEPT;
+    deptIdInput.value = deptMap[DEFAULT_DEPT] || '990653';
+    lopInput.value = DEFAULT_CLASS;
+    chucVuInput.value = DEFAULT_TITLE;
+    aliasIdInput.value = generateUniqueAlias(DEFAULT_DEPT, DEFAULT_CLASS);
+  }
+  initDefaultGroup();
+
+  // --- Search Dropdown Logic ---
+  hoTenInput.addEventListener('focus', () => showSuggestions(hoTenInput.value));
+  hoTenInput.addEventListener('input', function() {
+    showSuggestions(this.value);
+
+    const val = this.value.trim().toLowerCase();
+    const match = rawList.find(x => (x.ho_ten || '').trim().toLowerCase() === val);
+
+    if (match) {
+      applyPersonData(match);
+    } else {
+      // Người mới: lấy đúng Cột 2 của file và chức vụ người cuối cùng
+      resetExistingNotice();
+      initDefaultGroup();
+    }
+  });
+
+  function showSuggestions(keyword) {
+    const val = (keyword || '').trim().toLowerCase();
+    const items = suggestList.querySelectorAll('.suggest-item');
+    let hasResult = false;
+
+    items.forEach(item => {
+      const name = (item.dataset.name || '').toLowerCase();
+      const lop = (item.dataset.lop || '').toLowerCase();
+      if (!val || name.includes(val) || lop.includes(val)) {
+        item.style.display = 'flex';
+        hasResult = true;
+      } else {
+        item.style.display = 'none';
+      }
+    });
+
+    suggestList.style.display = hasResult ? 'block' : 'none';
+  }
+
+  // Đóng dropdown khi click ra ngoài
+  document.addEventListener('click', (e) => {
+    if (!hoTenInput.contains(e.target) && !suggestList.contains(e.target)) {
+      suggestList.style.display = 'none';
+    }
+  });
+
+  // Chọn từ dropdown gợi ý
+  suggestList.addEventListener('click', function(e) {
+    const item = e.target.closest('.suggest-item');
+    if (!item) return;
+
+    const matched = {
+      ho_ten: item.dataset.name,
+      phong_ban: item.dataset.phong || DEFAULT_DEPT,
+      lop: item.dataset.lop || DEFAULT_CLASS,
+      chuc_vu: item.dataset.chucvu || DEFAULT_TITLE,
+      anh_url: item.dataset.anh || '',
+      hanet_person_id: item.dataset.hanetid || ''
+    };
+
+    hoTenInput.value = matched.ho_ten;
+    applyPersonData(matched);
+    suggestList.style.display = 'none';
+  });
+
+  function applyPersonData(person) {
+    phongBanInput.value = person.phong_ban;
+    deptIdInput.value = deptMap[person.phong_ban] || '990653';
+    lopInput.value = person.lop;
+    chucVuInput.value = person.chuc_vu;
+    aliasIdInput.value = generateUniqueAlias(person.phong_ban, person.lop);
+
+    if ((person.hanet_person_id && person.hanet_person_id.trim() !== '') || (person.anh_url && person.anh_url.trim() !== '')) {
+      statusAlert.style.display = 'block';
+      statusAlert.className = 'alert alert-warning py-2 small';
+      statusAlert.innerHTML = `
+        <strong>${person.ho_ten}</strong> đã có dữ liệu Face ID! 
+        <a href="/edit/${person.hanet_person_id}" class="fw-bold ms-1 text-decoration-underline">Bấm vào đây để cập nhật ảnh</a>
+      `;
+      cameraSection.style.display = 'none';
+      btnSubmit.style.display = 'none';
+    } else {
+      resetExistingNotice();
+    }
+  }
+
+  function resetExistingNotice() {
+    statusAlert.style.display = 'none';
+    cameraSection.style.display = 'block';
+    btnSubmit.style.display = 'block';
+  }
+
+  // --- LIVE CAMERA LOGIC ---
+  async function startCamera() {
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 720 } },
+        audio: false
+      });
+      videoFeed.srcObject = mediaStream;
+      cameraPreviewBox.style.display = 'block';
+      btnToggleCamera.style.display = 'none';
+    } catch (err) {
+      alert('Không thể mở Camera trực tiếp: ' + err.message + '. Vui lòng chạm vào ô bên dưới để mở Camera điện thoại.');
+    }
+  }
+
+  function stopCamera() {
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(track => track.stop());
+      mediaStream = null;
+    }
+    cameraPreviewBox.style.display = 'none';
+    btnToggleCamera.style.display = 'inline-block';
+  }
+
+  btnToggleCamera.addEventListener('click', startCamera);
+  btnStopCamera.addEventListener('click', stopCamera);
+
+  btnSnap.addEventListener('click', () => {
+    if (!videoFeed.videoWidth) return;
+    canvasSnap.width = videoFeed.videoWidth;
+    canvasSnap.height = videoFeed.videoHeight;
+    const ctx = canvasSnap.getContext('2d');
+    ctx.drawImage(videoFeed, 0, 0, canvasSnap.width, canvasSnap.height);
+
+    const dataUrl = canvasSnap.toDataURL('image/jpeg', 0.9);
+    capturedImg.src = dataUrl;
+    capturedPreviewBox.style.display = 'block';
+    stopCamera();
+
+    canvasSnap.toBlob((blob) => {
+      const file = new File([blob], `snap_${Date.now()}.jpg`, { type: 'image/jpeg' });
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      avatarInput.files = dataTransfer.files;
+    }, 'image/jpeg', 0.9);
+  });
+
+  btnRetake.addEventListener('click', () => {
+    capturedPreviewBox.style.display = 'none';
+    avatarInput.value = '';
+    startCamera();
+  });
+</script>

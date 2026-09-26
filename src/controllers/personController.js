@@ -1,6 +1,7 @@
 const hanetService = require('../services/hanetService');
 const imageService = require('../services/imageService');
 const queueService = require('../services/queueService');
+const csvService = require('../services/csvService');
 
 // [READ] Danh sách Nhân sự từ Cloud
 exports.listPersons = async (req, res, next) => {
@@ -36,14 +37,42 @@ exports.renderRegisterForm = async (req, res) => {
   }
 };
 
+// [CREATE - CSV] Render Form Đăng ký theo danh mục CSV
+/**
+ * Render form đăng ký Face ID tối ưu Zalo theo file CSV danh mục
+ * Endpoint: GET /register/:file_name
+ */
+exports.viewRegisterByFile = async (req, res) => {
+  const fileName = req.params.file_name;
+  try {
+    const csvList = await csvService.readList(fileName);
+    
+    // Fail-soft: nếu file rỗng hoặc không tồn tại vẫn render, cảnh báo nhẹ qua flash
+    if (!csvList || csvList.length === 0) {
+      req.flash('warning', `Danh sách "${fileName}" hiện chưa có dữ liệu hoặc file không tồn tại.`);
+    }
+
+    res.render('person/register_csv', {
+      fileName,
+      csvList: csvList || [],
+      title: `Đăng Ký Face ID - ${fileName}`
+    });
+  } catch (err) {
+    console.error('[viewRegisterByFile Error]', err.message);
+    req.flash('error', `Không thể tải danh mục đăng ký: ${err.message}`);
+    res.redirect('/');
+  }
+};
+
 // [CREATE] Xử lý Đăng ký Nhân sự mới
 exports.handleRegister = async (req, res, next) => {
   try {
-    const { name, aliasID, title, departmentID, base64_image } = req.body;
+    const { name, aliasID, title, departmentID, base64_image, source_csv, departmentName, lop } = req.body;
+    const fileName = source_csv || req.body.file_name;
 
     if (!req.file && !base64_image) {
       req.flash('error', 'Vui lòng chụp hoặc tải ảnh khuôn mặt.');
-      return res.redirect('/register');
+      return res.redirect(fileName ? `/register/${fileName}` : '/register');
     }
 
     const processedImage = await imageService.processFaceImage({
@@ -64,13 +93,33 @@ exports.handleRegister = async (req, res, next) => {
       publicImageUrl
     });
 
+    // [CSV Integration] Tự động thêm người mới vào file CSV nếu đăng ký từ form /register/:file_name
+    if (fileName && name) {
+      csvService.readList(fileName).then(async (list) => {
+        const cleanName = name.trim().toLowerCase();
+        const exists = list.some(item => (item.ho_ten || '').trim().toLowerCase() === cleanName);
+        if (!exists) {
+          await csvService.appendPerson(fileName, {
+            ho_ten: name.trim(),
+            phong_ban: departmentName || req.body.phong_ban_name || 'Thiếu Nhi',
+            lop: lop || '',
+            chuc_vu: title || 'Học Sinh',
+            anh_url: '',
+            hanet_person_id: ''
+          });
+          console.log(`[CSV Append] Đã thêm thành viên mới "${name}" vào file data/${fileName}.csv`);
+        }
+      }).catch(e => console.warn('[CSV Append Warning]', e.message));
+    }
+
     const deptMsg = departmentID ? ' và gán vào phòng ban đã chọn' : '';
     req.flash('success', `Đã nhận yêu cầu đăng ký cho "${name}"${deptMsg}. Tiến trình xử lý đang chạy ngầm.`);
-    res.redirect('/');
+    res.redirect(fileName ? `/register/${fileName}` : '/');
   } catch (err) {
     console.error('[Register Error]', err.message);
     req.flash('error', `Lỗi đăng ký: ${err.message}`);
-    res.redirect('/register');
+    const redirectUrl = req.body?.source_csv || req.body?.file_name;
+    res.redirect(redirectUrl ? `/register/${redirectUrl}` : '/register');
   }
 };
 

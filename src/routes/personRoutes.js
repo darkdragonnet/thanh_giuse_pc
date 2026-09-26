@@ -15,6 +15,7 @@ router.get('/', personController.listPersons);
 router.get('/checkin', personController.renderCheckin);
 
 // [CREATE]
+router.get('/register/:file_name', personController.viewRegisterByFile);
 router.get('/register', personController.renderRegisterForm);
 router.post('/register', upload.single('face_image'), personController.handleRegister);
 
