@@ -23,26 +23,81 @@ const hanetQueue = new Queue('hanet-sync', {
 // Xử lý Job đăng ký nhân sự ngầm
 hanetQueue.process('register_person_job', 3, async (job) => {
   const { name, aliasID, title, departmentID, imagePath, publicImageUrl } = job.data;
+  const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
 
+  let result;
   try {
-    const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
-    // Gọi HANET AI Cloud API (Upload Multipart Binary trực tiếp)
-    const result = await hanetService.registerPerson({
-      name,
-      aliasID,
-      title,
-      departmentID,
-      imagePath,
-      faceUrl: publicImageUrl || `${fallbackBaseUrl}/uploads/${job.data.imageFilename}`
-    });
+    try {
+      // 1. Gọi HANET AI Cloud API
+      result = await hanetService.registerPerson({
+        name,
+        aliasID,
+        title,
+        departmentID,
+        imagePath,
+        publicImageUrl,
+        faceUrl: publicImageUrl || `${fallbackBaseUrl}/uploads/${job.data.imageFilename}`
+      });
 
-    // Bắt mã lỗi đặc thù từ HANET Cloud
-    if (result.returnCode === -9006) {
-      throw new Error('Mã lỗi -9006: Ảnh không đạt tiêu chuẩn (mờ, che mắt/mũi/miệng hoặc có nhiều hơn 1 mặt)');
-    } else if (result.returnCode === -9008) {
-      throw new Error('Mã lỗi -9008: Dung lượng lưu trữ Face ID cho địa điểm đã hết trên HANET Cloud');
-    } else if (result.returnCode !== 1) {
-      throw new Error(`HANET API Error [${result.returnCode}]: ${result.returnMessage}`);
+      // Bắt trường hợp HANET trả HTTP 200 nhưng returnCode là -9007
+      if (result && result.returnCode === -9007 && (result.data?.personID || result.data?.id)) {
+        const existingPersonID = result.data.personID || result.data.id;
+        console.warn(`[Queue register_person_job] Khuôn mặt đã tồn tại trên HANET với PersonID: ${existingPersonID}. Chuyển sang cập nhật info.`);
+
+        await hanetService.updatePersonInfo(existingPersonID, name, title, aliasID);
+
+        if (departmentID) {
+          try {
+            await hanetService.addPersonsToDepartment(departmentID, existingPersonID);
+          } catch (deptErr) {
+            console.warn('[Queue register_person_job] Gán phòng ban bổ sung thất bại:', deptErr.message);
+          }
+        }
+
+        if (imagePath) {
+          imageService.cleanupDelayed(imagePath, 30000);
+        }
+
+        return { returnCode: 1, returnMessage: 'Merged with existing person', personID: existingPersonID };
+      }
+
+      // Bắt mã lỗi đặc thù từ HANET Cloud
+      if (result.returnCode === -9006) {
+        throw new Error('Mã lỗi -9006: Ảnh không đạt tiêu chuẩn (mờ, che mắt/mũi/miệng hoặc có nhiều hơn 1 mặt)');
+      } else if (result.returnCode === -9008) {
+        throw new Error('Mã lỗi -9008: Dung lượng lưu trữ Face ID cho địa điểm đã hết trên HANET Cloud');
+      } else if (result.returnCode !== 1) {
+        throw new Error(`HANET API Error [${result.returnCode}]: ${result.returnMessage}`);
+      }
+    } catch (apiErr) {
+      const errData = apiErr.response?.data;
+      // Bắt trường hợp HANET ném HTTP 400 kèm returnCode: -9007 (Person already exist)
+      if (errData && errData.returnCode === -9007 && (errData.data?.personID || errData.data?.id)) {
+        const existingPersonID = errData.data.personID || errData.data.id;
+        console.warn(`[Queue register_person_job] Khuôn mặt đã tồn tại trên HANET với PersonID: ${existingPersonID}. Chuyển sang cập nhật info.`);
+
+        // Tự động cập nhật thông tin theo personID sẵn có
+        await hanetService.updatePersonInfo(existingPersonID, name, title, aliasID);
+
+        // Gán vào phòng ban nếu có
+        if (departmentID) {
+          try {
+            await hanetService.addPersonsToDepartment(departmentID, existingPersonID);
+          } catch (deptErr) {
+            console.warn('[Queue register_person_job] Gán phòng ban bổ sung thất bại:', deptErr.message);
+          }
+        }
+
+        if (imagePath) {
+          imageService.cleanupDelayed(imagePath, 30000);
+        }
+
+        // Hoàn tất job êm đẹp
+        return { returnCode: 1, returnMessage: 'Merged with existing person', personID: existingPersonID };
+      }
+
+      // Nếu là các lỗi khác thì throw để Bull Queue xử lý retry
+      throw apiErr;
     }
 
     // Nếu có chọn phòng ban, gán person vào phòng ban sau khi đăng ký thành công

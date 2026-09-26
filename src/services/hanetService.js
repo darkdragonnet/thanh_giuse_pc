@@ -141,12 +141,17 @@ class HanetService {
   async updateInfo(data) {
     const payload = {
       placeID: this.placeId,
-      personID: data.personID,
+      personID: data.personID || data.id,
       aliasID: data.aliasID,
       name: data.name,
       title: data.title || 'Nhân viên'
     };
     return this.postWithToken('/person/updateInfo', payload);
+  }
+
+  // Helper cập nhật thông tin nhân sự theo tham số rời
+  async updatePersonInfo(personID, name, title, aliasID) {
+    return this.updateInfo({ personID, name, title, aliasID });
   }
 
   // Cập nhật Face ID cho nhân sự qua faceUrl
