@@ -105,20 +105,29 @@ class HanetService {
       throw new Error('[HanetService] Không tìm thấy file ảnh tại đường dẫn để upload.');
     }
 
-    // Gửi request với headers của form-data (không cần truyền token qua headers nữa)
-    const response = await axios.post(`${this.apiBase}/person/register`, formData, {
-      headers: {
-        ...formData.getHeaders()
+    try {
+      // Gửi request với headers của form-data (không cần truyền token qua headers nữa)
+      const response = await axios.post(`${this.apiBase}/person/register`, formData, {
+        headers: {
+          ...formData.getHeaders()
+        }
+      });
+
+      // Kiểm tra token hết hạn (Mã -103) và xoay vòng
+      if (response.data && response.data.returnCode === -103 && !isRetry) {
+        console.warn('[HANET Service] Access token đã hết hạn (Mã -103). Đang tự động xoay vòng lấy token mới qua OAuth2...');
+        return this.registerPerson(data, true);
       }
-    });
 
-    // Kiểm tra token hết hạn (Mã -103) và xoay vòng
-    if (response.data && response.data.returnCode === -103 && !isRetry) {
-      console.warn('[HANET Service] Access token đã hết hạn (Mã -103). Đang tự động xoay vòng lấy token mới qua OAuth2...');
-      return this.registerPerson(data, true);
+      return response.data;
+    } catch (err) {
+      console.error('[HanetService Error Detail]:', {
+        status: err.response?.status,
+        data: err.response?.data,
+        message: err.message
+      });
+      throw err;
     }
-
-    return response.data;
   }
 
   // Cập nhật thông tin nhân sự (Name, AliasID, Title)
