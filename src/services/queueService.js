@@ -56,12 +56,19 @@ hanetQueue.process('register_person_job', 3, async (job) => {
       }
     }
 
-    return result;
-  } finally {
-    // Tự động dọn dẹp file tạm sau khi xử lý job thành công hoặc thất bại
+    // [RULE-022] Xử lý thành công -> Bắt buộc delay 30 giây (30000ms) trước khi xóa file ảnh trong uploads/ để HANET kịp fetch public URL qua Cloudflare
     if (imagePath) {
-      imageService.cleanup(imagePath);
+      imageService.cleanupDelayed(imagePath, 30000);
     }
+
+    return result;
+  } catch (error) {
+    // Nếu là lần thử cuối cùng bị thất bại thì mới hẹn giờ xóa file giải phóng ổ đĩa
+    const maxAttempts = job.opts?.attempts || 5;
+    if (job.attemptsMade + 1 >= maxAttempts && imagePath) {
+      imageService.cleanupDelayed(imagePath, 60000);
+    }
+    throw error;
   }
 });
 
@@ -101,11 +108,19 @@ hanetQueue.process('update_person_job', 3, async (job) => {
       }
     }
 
-    return { success: true, personID };
-  } finally {
+    // [RULE-022] Xử lý thành công -> Bắt buộc delay 30 giây (30000ms) trước khi xóa file ảnh trong uploads/ để HANET kịp fetch public URL qua Cloudflare
     if (imagePath) {
-      imageService.cleanup(imagePath);
+      imageService.cleanupDelayed(imagePath, 30000);
     }
+
+    return { success: true, personID };
+  } catch (error) {
+    // Nếu là lần thử cuối cùng bị thất bại thì mới hẹn giờ xóa file
+    const maxAttempts = job.opts?.attempts || 5;
+    if (job.attemptsMade + 1 >= maxAttempts && imagePath) {
+      imageService.cleanupDelayed(imagePath, 60000);
+    }
+    throw error;
   }
 });
 

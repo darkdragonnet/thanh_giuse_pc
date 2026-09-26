@@ -8,11 +8,20 @@ const expressLayouts = require('express-ejs-layouts');
 const { RedisStore } = require('connect-redis');
 const { createClient } = require('redis');
 const dotenv = require('dotenv');
+const imageService = require('./services/imageService');
 
 dotenv.config();
 
 const personRoutes = require('./routes/personRoutes');
 const departmentRoutes = require('./routes/departmentRoutes');
+
+// Khởi chạy Garbage Collection định kỳ mỗi 30 phút dọn dẹp file tạm mồ côi cũ hơn 1 giờ
+const gcTimer = setInterval(() => {
+  imageService.cleanOldFiles(60 * 60 * 1000);
+}, 30 * 60 * 1000);
+if (gcTimer && typeof gcTimer.unref === 'function') {
+  gcTimer.unref();
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;

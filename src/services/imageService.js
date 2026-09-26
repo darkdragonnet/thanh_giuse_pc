@@ -51,7 +51,7 @@ class ImageService {
   }
 
   /**
-   * Dọn dẹp tệp ảnh tạm thời trên ổ đĩa
+   * Dọn dẹp tệp ảnh tạm thời trên ổ đĩa (ngay lập tức)
    * @param {string} filePath 
    */
   cleanup(filePath) {
@@ -61,6 +61,61 @@ class ImageService {
       }
     } catch (err) {
       console.warn(`[ImageService Cleanup Warning] Không thể xóa file ${filePath}:`, err.message);
+    }
+  }
+
+  /**
+   * Dọn dẹp tệp ảnh tạm với độ trễ an toàn (mặc định 30 giây theo SDD v1.0)
+   * Tránh race condition khi HANET Cloud / Cloudflare Tunnel đang tải ảnh
+   * @param {string} filePath - Đường dẫn tuyệt đối của file
+   * @param {number} delayMs - Thời gian chờ tính theo mili-giây (mặc định 30,000ms)
+   */
+  cleanupDelayed(filePath, delayMs = 30000) {
+    if (!filePath) return;
+    const timer = setTimeout(() => {
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          console.log(`🧹 [ImageService] Đã dọn dẹp file sau ${delayMs / 1000}s: ${path.basename(filePath)}`);
+        }
+      } catch (err) {
+        console.warn(`⚠️ [ImageService Cleanup Warning] Lỗi xóa file ${filePath}:`, err.message);
+      }
+    }, delayMs);
+
+    // Không giữ Event Loop ngăn chặn tiến trình Node.js thoát tự nhiên
+    if (timer && typeof timer.unref === 'function') {
+      timer.unref();
+    }
+  }
+
+  /**
+   * Quét và dọn dẹp các file rác/mồ côi trong thư mục uploads cũ hơn maxAgeMs
+   * @param {number} maxAgeMs - Tuổi thọ tối đa của file tính bằng ms (mặc định 1 giờ = 3,600,000ms)
+   */
+  cleanOldFiles(maxAgeMs = 60 * 60 * 1000) {
+    try {
+      const uploadsDir = path.join(process.cwd(), 'uploads');
+      if (!fs.existsSync(uploadsDir)) return;
+      const files = fs.readdirSync(uploadsDir);
+      const now = Date.now();
+
+      files.forEach((file) => {
+        if (file.startsWith('processed_') || file.startsWith('face_')) {
+          const filePath = path.join(uploadsDir, file);
+          try {
+            const stats = fs.statSync(filePath);
+            if (now - stats.mtimeMs > maxAgeMs) {
+              fs.unlinkSync(filePath);
+              console.log(`🧹 [ImageService GC] Xóa file rác cũ: ${file}`);
+            }
+          } catch (fileErr) {
+            // File có thể đã bị xóa bởi process khác
+          }
+        }
+      });
+    } catch (err) {
+      console.warn('⚠️ [ImageService GC Error]:', err.message);
     }
   }
 }
