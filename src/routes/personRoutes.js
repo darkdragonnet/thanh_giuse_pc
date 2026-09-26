@@ -12,6 +12,7 @@ const upload = multer({
 
 // [READ]
 router.get('/', personController.listPersons);
+router.get('/links', personController.viewLinks);
 router.get('/checkin', personController.renderCheckin);
 
 // [CREATE]

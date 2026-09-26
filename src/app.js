@@ -9,6 +9,7 @@ const { RedisStore } = require('connect-redis');
 const { createClient } = require('redis');
 const dotenv = require('dotenv');
 const imageService = require('./services/imageService');
+const authMiddleware = require('./middlewares/authMiddleware');
 
 dotenv.config();
 
@@ -71,6 +72,9 @@ app.use((req, res, next) => {
   res.locals.currentPath = req.path;
   next();
 });
+
+// Middleware xác thực Token quản trị (Bảo vệ các route riêng tư)
+app.use(authMiddleware);
 
 // Mount Routes
 app.use('/departments', departmentRoutes);

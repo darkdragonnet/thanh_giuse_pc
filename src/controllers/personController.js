@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const hanetService = require('../services/hanetService');
 const imageService = require('../services/imageService');
 const queueService = require('../services/queueService');
@@ -19,6 +21,43 @@ exports.listPersons = async (req, res, next) => {
     const msg = getErrorMessage(code, err.message);
     req.flash('error', `Không thể lấy dữ liệu từ HANET Cloud: ${msg}`);
     res.render('person/list', { title: 'Danh sách Nhân sự', persons: [] });
+  }
+};
+
+// [READ] Danh Sách Link Đăng Ký theo Danh Mục CSV
+exports.viewLinks = (req, res) => {
+  try {
+    const dataDir = path.join(__dirname, '../../data');
+    const targetDir = fs.existsSync(dataDir) ? dataDir : path.join(process.cwd(), 'data');
+
+    let links = [];
+    if (fs.existsSync(targetDir)) {
+      const files = fs.readdirSync(targetDir)
+        .filter(f => f.endsWith('.csv') && !f.includes('.bak'));
+
+      const baseUrl = (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+
+      links = files.map(file => {
+        const slug = file.replace(/\.csv$/i, '');
+        return {
+          fileName: file,
+          name: slug,
+          url: `${baseUrl}/register/${encodeURIComponent(slug)}`
+        };
+      });
+    }
+
+    res.render('links', {
+      links,
+      title: 'Danh Sách Link Đăng Ký Face ID'
+    });
+  } catch (err) {
+    console.error('[viewLinks Error]', err.message);
+    res.render('links', {
+      links: [],
+      title: 'Danh Sách Link Đăng Ký Face ID',
+      error: 'Không thể tải danh sách link.'
+    });
   }
 };
 
