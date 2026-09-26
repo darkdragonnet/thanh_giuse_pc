@@ -1,6 +1,8 @@
+const fs = require('fs');
 const Queue = require('bull');
 const hanetService = require('./hanetService');
 const imageService = require('./imageService');
+const { getErrorMessage } = require('../utils/hanetErrorMap');
 
 // Khởi tạo Bull Queue chạy trên Redis DB 4
 const hanetQueue = new Queue('hanet-sync', {
@@ -21,117 +23,132 @@ const hanetQueue = new Queue('hanet-sync', {
 });
 
 // Xử lý Job đăng ký nhân sự ngầm
-hanetQueue.process('register_person_job', 3, async (job) => {
-  const { name, aliasID, title, departmentID, imagePath, publicImageUrl } = job.data;
+hanetQueue.process('register_person_job', 2, async (job) => {
+  const { name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename, source_csv } = job.data;
   const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
+  const faceUrl = publicImageUrl || (imageFilename ? `${fallbackBaseUrl}/uploads/${imageFilename}` : null);
 
-  let result;
+  console.log(`[Queue register_person_job] Bắt đầu xử lý: ${name} (${aliasID})`);
+
+  let finalPersonID = null;
+
   try {
     try {
-      // 1. Gọi HANET AI Cloud API
-      result = await hanetService.registerPerson({
-        name,
-        aliasID,
-        title,
-        departmentID,
-        imagePath,
-        publicImageUrl,
-        faceUrl: publicImageUrl || `${fallbackBaseUrl}/uploads/${job.data.imageFilename}`
-      });
+      // 1. Thử gọi API đăng ký nhân sự (ưu tiên binary multipart nếu có imagePath, hoặc bằng URL)
+      let registerRes;
+      if (imagePath && fs.existsSync(imagePath)) {
+        registerRes = await hanetService.registerPerson({
+          name,
+          aliasID,
+          title,
+          departmentID,
+          imagePath,
+          publicImageUrl,
+          faceUrl
+        });
+      } else {
+        registerRes = await hanetService.registerPersonByUrl({
+          name,
+          aliasID,
+          title,
+          departmentID,
+          faceUrl: faceUrl || publicImageUrl
+        });
+      }
 
-      // Bắt trường hợp HANET trả HTTP 200 nhưng returnCode là -9007
-      if (result && result.returnCode === -9007 && (result.data?.personID || result.data?.id)) {
-        const existingPersonID = result.data.personID || result.data.id;
-        console.warn(`[Queue register_person_job] Khuôn mặt đã tồn tại trên HANET với PersonID: ${existingPersonID}. Chuyển sang cập nhật info.`);
+      if (registerRes && registerRes.returnCode === 1) {
+        finalPersonID = registerRes.data?.personID || registerRes.data?.id;
+        console.log(`[Queue register_person_job] ✅ Đăng ký mới thành công: ${finalPersonID}`);
+      } else if (registerRes && registerRes.returnCode === -9007 && (registerRes.data?.personID || registerRes.data?.id)) {
+        // Trường hợp HANET trả HTTP 200 kèm returnCode -9007
+        finalPersonID = registerRes.data?.personID || registerRes.data?.id;
+        console.warn(`[Queue register_person_job] ${getErrorMessage(-9007)} (PersonID: ${finalPersonID}). Tiến hành cập nhật ảnh Face ID & thông tin...`);
 
-        await hanetService.updatePersonInfo(existingPersonID, name, title, aliasID);
-
-        if (departmentID) {
+        // a. Cập nhật khuôn mặt mới (Face ID)
+        const targetFaceUrl = faceUrl || publicImageUrl;
+        if (targetFaceUrl) {
           try {
-            await hanetService.addPersonsToDepartment(departmentID, existingPersonID);
-          } catch (deptErr) {
-            console.warn('[Queue register_person_job] Gán phòng ban bổ sung thất bại:', deptErr.message);
+            await hanetService.updatePersonByFaceUrl(finalPersonID, targetFaceUrl);
+            console.log(`[Queue register_person_job] ✅ Đã cập nhật ảnh Face ID mới cho ${finalPersonID}`);
+          } catch (faceErr) {
+            const errCode = faceErr.response?.data?.returnCode;
+            console.warn(`[Queue register_person_job] Cập nhật Face ID thất bại:`, getErrorMessage(errCode, faceErr.message));
           }
         }
 
-        if (imagePath) {
-          imageService.cleanupDelayed(imagePath, 30000);
+        // b. Cập nhật thông tin cá nhân
+        try {
+          await hanetService.updatePersonInfo(finalPersonID, name, title, aliasID);
+          console.log(`[Queue register_person_job] ✅ Đã cập nhật thông tin cho ${finalPersonID}`);
+        } catch (infoErr) {
+          const errCode = infoErr.response?.data?.returnCode;
+          console.warn(`[Queue register_person_job] Cập nhật info thất bại:`, getErrorMessage(errCode, infoErr.message));
         }
-
-        return { returnCode: 1, returnMessage: 'Merged with existing person', personID: existingPersonID };
-      }
-
-      // Bắt mã lỗi đặc thù từ HANET Cloud
-      if (result.returnCode === -9006) {
-        throw new Error('Mã lỗi -9006: Ảnh không đạt tiêu chuẩn (mờ, che mắt/mũi/miệng hoặc có nhiều hơn 1 mặt)');
-      } else if (result.returnCode === -9008) {
-        throw new Error('Mã lỗi -9008: Dung lượng lưu trữ Face ID cho địa điểm đã hết trên HANET Cloud');
-      } else if (result.returnCode !== 1) {
-        throw new Error(`HANET API Error [${result.returnCode}]: ${result.returnMessage}`);
+      } else {
+        const errorMsg = getErrorMessage(registerRes?.returnCode, registerRes?.returnMessage);
+        throw new Error(`[Mã lỗi ${registerRes?.returnCode}]: ${errorMsg}`);
       }
     } catch (apiErr) {
       const errData = apiErr.response?.data;
-      // Bắt trường hợp HANET ném HTTP 400 kèm returnCode: -9007 (Person already exist)
+
+      // 2. Xử lý lỗi -9007: Người này / Khuôn mặt này đã tồn tại trên HANET
       if (errData && errData.returnCode === -9007 && (errData.data?.personID || errData.data?.id)) {
-        const existingPersonID = errData.data.personID || errData.data.id;
-        console.warn(`[Queue register_person_job] Khuôn mặt đã tồn tại trên HANET với PersonID: ${existingPersonID}. Chuyển sang cập nhật info.`);
+        finalPersonID = errData.data.personID || errData.data.id;
+        console.warn(`[Queue register_person_job] ${getErrorMessage(-9007)} (PersonID: ${finalPersonID}). Tiến hành cập nhật ảnh Face ID & thông tin...`);
 
-        // Tự động cập nhật thông tin theo personID sẵn có
-        await hanetService.updatePersonInfo(existingPersonID, name, title, aliasID);
-
-        // Gán vào phòng ban nếu có
-        if (departmentID) {
+        // a. Cập nhật khuôn mặt mới (Face ID)
+        const targetFaceUrl = faceUrl || publicImageUrl;
+        if (targetFaceUrl) {
           try {
-            await hanetService.addPersonsToDepartment(departmentID, existingPersonID);
-          } catch (deptErr) {
-            console.warn('[Queue register_person_job] Gán phòng ban bổ sung thất bại:', deptErr.message);
+            await hanetService.updatePersonByFaceUrl(finalPersonID, targetFaceUrl);
+            console.log(`[Queue register_person_job] ✅ Đã cập nhật ảnh Face ID mới cho ${finalPersonID}`);
+          } catch (faceErr) {
+            const errCode = faceErr.response?.data?.returnCode;
+            console.warn(`[Queue register_person_job] Cập nhật Face ID thất bại:`, getErrorMessage(errCode, faceErr.message));
           }
         }
 
-        if (imagePath) {
-          imageService.cleanupDelayed(imagePath, 30000);
+        // b. Cập nhật thông tin cá nhân
+        try {
+          await hanetService.updatePersonInfo(finalPersonID, name, title, aliasID);
+          console.log(`[Queue register_person_job] ✅ Đã cập nhật thông tin cho ${finalPersonID}`);
+        } catch (infoErr) {
+          const errCode = infoErr.response?.data?.returnCode;
+          console.warn(`[Queue register_person_job] Cập nhật info thất bại:`, getErrorMessage(errCode, infoErr.message));
         }
-
-        // Hoàn tất job êm đẹp
-        return { returnCode: 1, returnMessage: 'Merged with existing person', personID: existingPersonID };
+      } else {
+        const code = errData?.returnCode || apiErr.code;
+        console.error(`[Queue register_person_job] Lỗi khi xử lý: ${getErrorMessage(code, apiErr.message)}`);
+        // Lỗi khác ngoài -9007 thì throw để Bull Queue retry
+        throw apiErr;
       }
-
-      // Nếu là các lỗi khác thì throw để Bull Queue xử lý retry
-      throw apiErr;
     }
 
-    // Nếu có chọn phòng ban, gán person vào phòng ban sau khi đăng ký thành công
-    if (departmentID) {
+    // 3. Gán vào phòng ban nếu có
+    if (finalPersonID && departmentID) {
       try {
-        const newPersonID = result.data?.id || result.data?.personID || result.data?.personId;
-        if (newPersonID) {
-          const addRes = await hanetService.addPersonsToDepartment(departmentID, newPersonID);
-          console.log(`[Queue register_person_job] Gán person ${newPersonID} vào phòng ban ${departmentID}: returnCode=${addRes.returnCode}`);
-        }
+        await hanetService.addPersonsToDepartment(departmentID, finalPersonID);
+        console.log(`[Queue register_person_job] ✅ Đã gán ${finalPersonID} vào phòng ban ${departmentID}`);
       } catch (deptErr) {
-        console.warn(`[Queue register_person_job] Lỗi gán phòng ban ${departmentID}:`, deptErr.message);
+        const errCode = deptErr.response?.data?.returnCode;
+        console.warn(`[Queue register_person_job] Gán phòng ban thất bại:`, getErrorMessage(errCode, deptErr.message));
       }
     }
 
-    // [RULE-022] Xử lý thành công -> Bắt buộc delay 30 giây (30000ms) trước khi xóa file ảnh trong uploads/ để HANET kịp fetch public URL qua Cloudflare
+    return { returnCode: 1, returnMessage: 'Success', personID: finalPersonID };
+
+  } finally {
+    // [RULE-022] Luôn delay 30 giây mới dọn dẹp ảnh để HANET fetch xong
     if (imagePath) {
       imageService.cleanupDelayed(imagePath, 30000);
     }
-
-    return result;
-  } catch (error) {
-    // Nếu là lần thử cuối cùng bị thất bại thì mới hẹn giờ xóa file giải phóng ổ đĩa
-    const maxAttempts = job.opts?.attempts || 5;
-    if (job.attemptsMade + 1 >= maxAttempts && imagePath) {
-      imageService.cleanupDelayed(imagePath, 60000);
-    }
-    throw error;
   }
 });
 
 // Xử lý Job cập nhật nhân sự ngầm
 hanetQueue.process('update_person_job', 3, async (job) => {
-  const { personID, name, aliasID, title, imagePath, publicImageUrl } = job.data;
+  const { personID, name, aliasID, title, imagePath, publicImageUrl, imageFilename } = job.data;
+  console.log(`[Queue update_person_job] Bắt đầu xử lý: ${name} (${personID})`);
 
   try {
     // 1. Cập nhật thông tin cơ bản
@@ -142,42 +159,33 @@ hanetQueue.process('update_person_job', 3, async (job) => {
       title
     });
 
-    if (infoResult.returnCode === -5005) {
-      throw new Error('Mã lỗi -5005: Lỗi cập nhật hồ sơ nhân sự trên HANET Cloud');
-    } else if (infoResult.returnCode !== 1) {
-      throw new Error(`HANET Update Info Error [${infoResult.returnCode}]: ${infoResult.returnMessage}`);
+    if (infoResult.returnCode !== 1) {
+      const errorMsg = getErrorMessage(infoResult.returnCode, infoResult.returnMessage);
+      throw new Error(`[Mã lỗi ${infoResult.returnCode}]: ${errorMsg}`);
     }
 
     // 2. Nếu có ảnh mới, cập nhật Face ID
-    if (job.data.imageFilename) {
-      const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
+    const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
+    const faceUrl = publicImageUrl || (imageFilename ? `${fallbackBaseUrl}/uploads/${imageFilename}` : null);
+
+    if (faceUrl) {
       const faceResult = await hanetService.updateByFaceUrl({
         personID,
-        faceUrl: publicImageUrl || `${fallbackBaseUrl}/uploads/${job.data.imageFilename}`
+        faceUrl
       });
 
-      if (faceResult.returnCode === -9006) {
-        throw new Error('Mã lỗi -9006: Ảnh khuôn mặt mới không đạt tiêu chuẩn');
-      } else if (faceResult.returnCode === -5008) {
-        throw new Error('Mã lỗi -5008: Lỗi cập nhật Face ID trên Cloud');
-      } else if (faceResult.returnCode !== 1) {
-        throw new Error(`HANET Update Face Error [${faceResult.returnCode}]: ${faceResult.returnMessage}`);
+      if (faceResult.returnCode !== 1) {
+        const errorMsg = getErrorMessage(faceResult.returnCode, faceResult.returnMessage);
+        throw new Error(`[Mã lỗi ${faceResult.returnCode}]: ${errorMsg}`);
       }
     }
 
-    // [RULE-022] Xử lý thành công -> Bắt buộc delay 30 giây (30000ms) trước khi xóa file ảnh trong uploads/ để HANET kịp fetch public URL qua Cloudflare
+    return { success: true, personID };
+  } finally {
+    // [RULE-022] Xử lý thành công hoặc kết thúc -> Luôn delay 30 giây trước khi xóa file tạm
     if (imagePath) {
       imageService.cleanupDelayed(imagePath, 30000);
     }
-
-    return { success: true, personID };
-  } catch (error) {
-    // Nếu là lần thử cuối cùng bị thất bại thì mới hẹn giờ xóa file
-    const maxAttempts = job.opts?.attempts || 5;
-    if (job.attemptsMade + 1 >= maxAttempts && imagePath) {
-      imageService.cleanupDelayed(imagePath, 60000);
-    }
-    throw error;
   }
 });
 
