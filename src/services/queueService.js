@@ -26,11 +26,13 @@ hanetQueue.process('register_person_job', 3, async (job) => {
 
   try {
     const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
-    // Gọi HANET AI Cloud API
+    // Gọi HANET AI Cloud API (Upload Multipart Binary trực tiếp)
     const result = await hanetService.registerPerson({
       name,
       aliasID,
       title,
+      departmentID,
+      imagePath,
       faceUrl: publicImageUrl || `${fallbackBaseUrl}/uploads/${job.data.imageFilename}`
     });
 

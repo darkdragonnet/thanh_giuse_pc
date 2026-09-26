@@ -1,5 +1,7 @@
 const axios = require('axios');
 const qs = require('qs');
+const FormData = require('form-data');
+const fs = require('fs');
 
 class HanetService {
   constructor() {
@@ -83,16 +85,41 @@ class HanetService {
    * PERSON APIs
    * ========================================================================= */
 
-  // Đăng ký nhân sự kèm ảnh
-  async registerPerson(data) {
-    const payload = {
-      placeID: this.placeId,
-      name: data.name,
-      aliasID: data.aliasID,
-      title: data.title || 'Nhân viên',
-      faceUrl: data.publicImageUrl || data.faceUrl
-    };
-    return this.postWithToken('/person/registerByUrl', payload);
+  // Đăng ký nhân sự kèm tệp ảnh nhị phân trực tiếp (Multipart Form-Data)
+  async registerPerson(data, isRetry = false) {
+    const token = await this.getAccessToken(isRetry);
+    const formData = new FormData();
+
+    formData.append('placeID', this.placeId);
+    formData.append('name', data.name);
+    formData.append('aliasID', data.aliasID);
+    formData.append('title', data.title || 'Nhân viên');
+    if (data.departmentID) {
+      formData.append('departmentID', data.departmentID);
+    }
+
+    // Đọc file ảnh từ local path và đính kèm binary stream
+    if (data.imagePath && fs.existsSync(data.imagePath)) {
+      formData.append('faceImage', fs.createReadStream(data.imagePath));
+    } else {
+      throw new Error('[HanetService] Không tìm thấy file ảnh tại đường dẫn để upload.');
+    }
+
+    // Gọi endpoint đăng ký trực tiếp bằng file của HANET
+    const response = await axios.post(`${this.apiBase}/person/register`, formData, {
+      headers: {
+        ...formData.getHeaders(),
+        token: token
+      }
+    });
+
+    // Kiểm tra token hết hạn (Mã -103) và xoay vòng
+    if (response.data && response.data.returnCode === -103 && !isRetry) {
+      console.warn('[HANET Service] Access token đã hết hạn (Mã -103). Đang tự động xoay vòng lấy token mới qua OAuth2...');
+      return this.registerPerson(data, true);
+    }
+
+    return response.data;
   }
 
   // Cập nhật thông tin nhân sự (Name, AliasID, Title)
