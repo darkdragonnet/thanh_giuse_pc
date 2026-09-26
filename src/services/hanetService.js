@@ -90,7 +90,7 @@ class HanetService {
       name: data.name,
       aliasID: data.aliasID,
       title: data.title || 'Nhân viên',
-      faceUrl: data.faceUrl
+      faceUrl: data.publicImageUrl || data.faceUrl
     };
     return this.postWithToken('/person/registerByUrl', payload);
   }
@@ -112,7 +112,7 @@ class HanetService {
     const payload = {
       placeID: this.placeId,
       personID: data.personID,
-      faceUrl: data.faceUrl
+      faceUrl: data.publicImageUrl || data.faceUrl
     };
     return this.postWithToken('/person/updateByFaceUrl', payload);
   }
