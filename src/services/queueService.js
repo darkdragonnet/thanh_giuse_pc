@@ -147,7 +147,7 @@ hanetQueue.process('register_person_job', 2, async (job) => {
 
 // Xử lý Job cập nhật nhân sự ngầm
 hanetQueue.process('update_person_job', 3, async (job) => {
-  const { personID, name, aliasID, title, imagePath, publicImageUrl, imageFilename } = job.data;
+  const { personID, name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename } = job.data;
   console.log(`[Queue update_person_job] Bắt đầu xử lý: ${name} (${personID})`);
 
   try {
@@ -156,12 +156,23 @@ hanetQueue.process('update_person_job', 3, async (job) => {
       personID,
       name,
       aliasID,
-      title
+      title,
+      departmentID
     });
 
     if (infoResult.returnCode !== 1) {
       const errorMsg = getErrorMessage(infoResult.returnCode, infoResult.returnMessage);
       throw new Error(`[Mã lỗi ${infoResult.returnCode}]: ${errorMsg}`);
+    }
+
+    // Gán phòng ban để khóa liên kết phòng ban 100% trên HANET Cloud
+    if (departmentID && String(departmentID) !== '0') {
+      try {
+        await hanetService.addPersonsToDepartment(departmentID, personID);
+        console.log(`[Queue update_person_job] ✅ Đã khóa liên kết phòng ban ${departmentID} cho PersonID: ${personID}`);
+      } catch (deptErr) {
+        console.warn(`[Queue update_person_job] Gán phòng ban thất bại:`, deptErr.message);
+      }
     }
 
     // 2. Nếu có ảnh mới, cập nhật Face ID

@@ -1,0 +1,319 @@
+<div class="container-fluid py-4 px-3 px-md-4">
+  <!-- Card Container Chính -->
+  <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
+    
+    <!-- Header Giao Diện -->
+    <div class="card-header bg-white py-3 px-4 border-0 d-flex flex-wrap justify-content-between align-items-center">
+      <div>
+        <h4 class="mb-1 fw-bold text-dark d-flex align-items-center">
+          <span class="p-2 bg-primary-subtle text-primary rounded-3 me-2 d-inline-flex align-items-center justify-content-center" style="width: 38px; height: 38px;">
+            <i class="bi bi-people-fill fs-5"></i>
+          </span>
+          Danh Sách Face ID Nhân Sự
+        </h4>
+        <div class="text-muted small">
+          Tổng số: <span class="badge bg-light text-dark border fw-semibold me-2"><%= (persons || []).length %></span>
+          Đang hiển thị: <span id="filteredCount" class="badge bg-primary-subtle text-primary fw-bold"><%= (persons || []).length %></span>
+        </div>
+      </div>
+
+      <div class="mt-3 mt-md-0 d-flex gap-2">
+        <button type="button" id="btnResetFilter" class="btn btn-outline-secondary btn-sm px-3 rounded-3" title="Xóa toàn bộ bộ lọc">
+          <i class="bi bi-arrow-counterclockwise me-1"></i> Xóa lọc
+        </button>
+        <a href="/register" class="btn btn-primary btn-sm px-3 rounded-3 shadow-sm fw-medium">
+          <i class="bi bi-person-plus-fill me-1"></i> Đăng Ký Mới
+        </a>
+      </div>
+    </div>
+
+    <!-- Thanh Công Cụ Bộ Lọc Wildcard Đa Năng -->
+    <div class="card-body bg-light-subtle border-top border-bottom py-3 px-4">
+      <div class="row g-2">
+        <!-- Lọc Mã NV -->
+        <div class="col-12 col-sm-6 col-lg-3">
+          <label class="form-label small fw-semibold text-secondary mb-1">
+            Mã NV (Alias) <span class="text-muted fw-normal" title="* đại diện nhóm ký tự, ? đại diện 1 ký tự">(*, ?)</span>
+          </label>
+          <div class="input-group input-group-sm">
+            <span class="input-group-text bg-white border-end-0 text-muted"><i class="bi bi-upc-scan"></i></span>
+            <input type="text" id="filterAlias" class="form-control bg-white border-start-0 filter-input" placeholder="VD: *GLV*, LG*, TN_?01">
+          </div>
+        </div>
+
+        <!-- Lọc Họ và Tên -->
+        <div class="col-12 col-sm-6 col-lg-3">
+          <label class="form-label small fw-semibold text-secondary mb-1">
+            Họ và Tên <span class="text-muted fw-normal">(*, ?)</span>
+          </label>
+          <div class="input-group input-group-sm">
+            <span class="input-group-text bg-white border-end-0 text-muted"><i class="bi bi-search"></i></span>
+            <input type="text" id="filterName" class="form-control bg-white border-start-0 filter-input" placeholder="VD: *Long*, Nguyễn*">
+          </div>
+        </div>
+
+        <!-- Lọc Chức Vụ -->
+        <div class="col-12 col-sm-6 col-lg-3">
+          <label class="form-label small fw-semibold text-secondary mb-1">
+            Chức Vụ <span class="text-muted fw-normal">(*, ?)</span>
+          </label>
+          <div class="input-group input-group-sm">
+            <span class="input-group-text bg-white border-end-0 text-muted"><i class="bi bi-briefcase"></i></span>
+            <input type="text" id="filterTitle" class="form-control bg-white border-start-0 filter-input" placeholder="VD: *Học*, GLV*">
+          </div>
+        </div>
+
+        <!-- Lọc Cloud Person ID -->
+        <div class="col-12 col-sm-6 col-lg-3">
+          <label class="form-label small fw-semibold text-secondary mb-1">
+            Cloud Person ID <span class="text-muted fw-normal">(*, ?)</span>
+          </label>
+          <div class="input-group input-group-sm">
+            <span class="input-group-text bg-white border-end-0 text-muted"><i class="bi bi-hash"></i></span>
+            <input type="text" id="filterPersonID" class="form-control bg-white border-start-0 filter-input" placeholder="VD: *864, 332*">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bảng Danh Sách 6 Cột Hiện Tại -->
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0" id="personTable">
+        <thead class="table-light border-bottom">
+          <tr>
+            <th class="text-center text-secondary small py-3" style="width: 70px;">Ảnh Face</th>
+            <th class="cursor-pointer sortable text-secondary small py-3" data-col="aliasID" style="width: 170px;">
+              <div class="d-flex align-items-center justify-content-between">
+                <span>Mã NV (Alias)</span>
+                <i class="bi bi-arrow-down-up text-muted opacity-50 ms-1 sort-icon"></i>
+              </div>
+            </th>
+            <th class="cursor-pointer sortable text-secondary small py-3" data-col="name">
+              <div class="d-flex align-items-center justify-content-between">
+                <span>Họ và Tên</span>
+                <i class="bi bi-arrow-down-up text-muted opacity-50 ms-1 sort-icon"></i>
+              </div>
+            </th>
+            <th class="cursor-pointer sortable text-secondary small py-3" data-col="title" style="width: 180px;">
+              <div class="d-flex align-items-center justify-content-between">
+                <span>Chức Vụ</span>
+                <i class="bi bi-arrow-down-up text-muted opacity-50 ms-1 sort-icon"></i>
+              </div>
+            </th>
+            <th class="cursor-pointer sortable text-secondary small py-3" data-col="personID" style="width: 220px;">
+              <div class="d-flex align-items-center justify-content-between">
+                <span>Cloud Person ID</span>
+                <i class="bi bi-arrow-down-up text-muted opacity-50 ms-1 sort-icon"></i>
+              </div>
+            </th>
+            <th class="text-center text-secondary small py-3" style="width: 110px;">Thao Tác</th>
+          </tr>
+        </thead>
+        <tbody id="personTableBody">
+          <% (persons || []).forEach(p => { %>
+            <tr class="person-row border-bottom border-light-subtle"
+                data-alias="<%= (p.aliasID || '').toLowerCase() %>"
+                data-name="<%= (p.name || '').toLowerCase() %>"
+                data-title="<%= (p.title || '').toLowerCase() %>"
+                data-personid="<%= (p.personID || p.id || '').toLowerCase() %>">
+              
+              <!-- Cột 1: Ảnh Face -->
+              <td class="text-center py-2">
+                <% if (p.avatar && p.avatar.trim()) { %>
+                  <img src="<%= p.avatar %>" alt="avatar" class="rounded-circle shadow-sm" style="width: 42px; height: 42px; object-fit: cover; border: 2px solid #e9ecef;" onerror="this.onerror=null; this.src='/images/default-avatar.png'">
+                <% } else { %>
+                  <div class="rounded-circle bg-light border text-secondary d-inline-flex align-items-center justify-content-center" style="width: 42px; height: 42px;">
+                    <i class="bi bi-person-fill fs-5 opacity-50"></i>
+                  </div>
+                <% } %>
+              </td>
+
+              <!-- Cột 2: Mã NV (Alias) -->
+              <td class="py-2">
+                <span class="badge bg-light text-dark border font-monospace px-2 py-1 fs-7">
+                  <%= p.aliasID || 'N/A' %>
+                </span>
+              </td>
+
+              <!-- Cột 3: Họ và Tên -->
+              <td class="py-2 fw-medium text-dark"><%= p.name %></td>
+
+              <!-- Cột 4: Chức Vụ -->
+              <td class="py-2">
+                <span class="text-secondary small fw-normal"><%= p.title || '—' %></span>
+              </td>
+
+              <!-- Cột 5: Cloud Person ID -->
+              <td class="py-2">
+                <code class="text-primary-emphasis bg-primary-subtle px-2 py-1 rounded small font-monospace"><%= p.personID || p.id %></code>
+              </td>
+
+              <!-- Cột 6: Thao Tác -->
+              <td class="text-center py-2">
+                <a href="/edit/<%= p.personID || p.id %>" class="btn btn-sm btn-outline-primary rounded-pill px-3 py-1 shadow-xs" title="Chỉnh sửa khuôn mặt / thông tin">
+                  <i class="bi bi-pencil-square me-1"></i>Sửa
+                </a>
+              </td>
+            </tr>
+          <% }) %>
+
+          <!-- Dòng thông báo khi không có kết quả -->
+          <tr id="noResultRow" style="display: none;">
+            <td colspan="6" class="text-center py-5 text-muted">
+              <div class="py-4">
+                <i class="bi bi-funnel text-secondary opacity-25 display-4 mb-3 d-block"></i>
+                <h6 class="fw-semibold text-secondary">Không tìm thấy nhân sự phù hợp</h6>
+                <p class="small text-muted mb-0">Thử thay đổi từ khóa hoặc xóa ký tự đại diện (*, ?) để tìm lại.</p>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+<!-- SCRIPTS: BỘ LỌC WILDCARD VÀ SORT CLIENT-SIDE -->
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const filterAlias = document.getElementById('filterAlias');
+    const filterName = document.getElementById('filterName');
+    const filterTitle = document.getElementById('filterTitle');
+    const filterPersonID = document.getElementById('filterPersonID');
+    const btnResetFilter = document.getElementById('btnResetFilter');
+    const filteredCount = document.getElementById('filteredCount');
+    const noResultRow = document.getElementById('noResultRow');
+    const tableBody = document.getElementById('personTableBody');
+    const rows = Array.from(tableBody.querySelectorAll('.person-row'));
+
+    /**
+     * Chuyển chuỗi tìm kiếm thành Regular Expression hỗ trợ Wildcard:
+     * - '*' : Đại diện cho 0 hoặc nhiều ký tự bất kỳ
+     * - '?' : Đại diện cho đúng 1 ký tự bất kỳ
+     * - Nếu không có * hoặc ? : Tìm kiếm chứa chuỗi con thông thường (contains)
+     */
+    function parseWildcardToRegExp(term) {
+      if (!term) return null;
+      let raw = term.trim().toLowerCase();
+      if (!raw) return null;
+
+      // Escape các ký tự đặc biệt của regex, giữ lại * và ?
+      let escaped = raw.replace(/([.+^=!:${}()|\[\]\/\\])/g, "\\$1");
+
+      if (raw.includes('*') || raw.includes('?')) {
+        // Thay * bằng .*, thay ? bằng .
+        const pattern = escaped.replace(/\*/g, '.*').replace(/\?/g, '.');
+        return new RegExp('^' + pattern + '$', 'i');
+      } else {
+        // Mặc định là tìm kiếm chuỗi con
+        return new RegExp(escaped, 'i');
+      }
+    }
+
+    // Hàm áp dụng bộ lọc đồng thời trên cả 4 cột
+    function executeFilter() {
+      const regexAlias = parseWildcardToRegExp(filterAlias.value);
+      const regexName = parseWildcardToRegExp(filterName.value);
+      const regexTitle = parseWildcardToRegExp(filterTitle.value);
+      const regexPersonID = parseWildcardToRegExp(filterPersonID.value);
+
+      let matchedCount = 0;
+
+      rows.forEach(row => {
+        const alias = row.dataset.alias;
+        const name = row.dataset.name;
+        const title = row.dataset.title;
+        const pid = row.dataset.personid;
+
+        let isMatch = true;
+
+        if (regexAlias && !regexAlias.test(alias)) isMatch = false;
+        if (regexName && !regexName.test(name)) isMatch = false;
+        if (regexTitle && !regexTitle.test(title)) isMatch = false;
+        if (regexPersonID && !regexPersonID.test(pid)) isMatch = false;
+
+        if (isMatch) {
+          row.style.display = '';
+          matchedCount++;
+        } else {
+          row.style.display = 'none';
+        }
+      });
+
+      filteredCount.innerText = matchedCount;
+      noResultRow.style.display = matchedCount === 0 ? '' : 'none';
+    }
+
+    // Lắng nghe sự kiện gõ phím trên 4 ô lọc
+    [filterAlias, filterName, filterTitle, filterPersonID].forEach(input => {
+      input.addEventListener('input', executeFilter);
+    });
+
+    // Reset bộ lọc về trạng thái ban đầu
+    btnResetFilter.addEventListener('click', () => {
+      filterAlias.value = '';
+      filterName.value = '';
+      filterTitle.value = '';
+      filterPersonID.value = '';
+      executeFilter();
+    });
+
+    // Logic Sắp Xếp (Sort)
+    let activeSortCol = '';
+    let sortDirectionAsc = true;
+
+    document.querySelectorAll('.sortable').forEach(header => {
+      header.addEventListener('click', () => {
+        const col = header.dataset.col;
+
+        if (activeSortCol === col) {
+          sortDirectionAsc = !sortDirectionAsc;
+        } else {
+          activeSortCol = col;
+          sortDirectionAsc = true;
+        }
+
+        // Cập nhật icon Sort
+        document.querySelectorAll('.sortable .sort-icon').forEach(icon => {
+          icon.className = 'bi bi-arrow-down-up text-muted opacity-50 ms-1 sort-icon';
+        });
+
+        const thisIcon = header.querySelector('.sort-icon');
+        thisIcon.className = sortDirectionAsc 
+          ? 'bi bi-sort-alpha-down text-primary opacity-100 ms-1 sort-icon fw-bold' 
+          : 'bi bi-sort-alpha-up-alt text-primary opacity-100 ms-1 sort-icon fw-bold';
+
+        // Sắp xếp các hàng
+        rows.sort((a, b) => {
+          const valA = (a.dataset[col.toLowerCase()] || '').trim();
+          const valB = (b.dataset[col.toLowerCase()] || '').trim();
+
+          // Xử lý PersonID là số lớn 19 chữ số
+          if (col === 'personID' && !isNaN(valA) && !isNaN(valB)) {
+            const bigA = BigInt(valA || 0);
+            const bigB = BigInt(valB || 0);
+            if (bigA === bigB) return 0;
+            return sortDirectionAsc ? (bigA > bigB ? 1 : -1) : (bigA < bigB ? 1 : -1);
+          }
+
+          // So sánh chuỗi tiếng Việt chuẩn locale
+          return sortDirectionAsc 
+            ? valA.localeCompare(valB, 'vi', { sensitivity: 'base' })
+            : valB.localeCompare(valA, 'vi', { sensitivity: 'base' });
+        });
+
+        // Gắn lại vào DOM theo thứ tự mới
+        rows.forEach(r => tableBody.appendChild(r));
+        tableBody.appendChild(noResultRow);
+      });
+    });
+  });
+</script>
+
+<style>
+  .cursor-pointer { cursor: pointer; user-select: none; }
+  .sortable:hover { background-color: rgba(13, 110, 253, 0.04); }
+  .filter-input:focus { border-color: #0d6efd; box-shadow: none; }
+  .shadow-xs { box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+</style>

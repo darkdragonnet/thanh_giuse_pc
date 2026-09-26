@@ -137,7 +137,7 @@ class HanetService {
     }
   }
 
-  // Cập nhật thông tin nhân sự (Name, AliasID, Title)
+  // Cập nhật thông tin nhân sự (Name, AliasID, Title, DepartmentID)
   async updateInfo(data) {
     const payload = {
       placeID: this.placeId,
@@ -146,22 +146,46 @@ class HanetService {
       name: data.name,
       title: data.title || 'Nhân viên'
     };
+    if (data.departmentID && String(data.departmentID) !== '0') {
+      payload.departmentID = String(data.departmentID);
+    }
     return this.postWithToken('/person/updateInfo', payload);
   }
 
   // Helper cập nhật thông tin nhân sự theo tham số rời
-  async updatePersonInfo(personID, name, title, aliasID) {
-    return this.updateInfo({ personID, name, title, aliasID });
+  async updatePersonInfo(personID, name, title, aliasID, departmentID) {
+    return this.updateInfo({ personID, name, title, aliasID, departmentID });
   }
 
   // Cập nhật Face ID cho nhân sự qua faceUrl
   async updateByFaceUrl(data) {
     const payload = {
       placeID: this.placeId,
-      personID: data.personID,
+      personID: data.personID || data.id,
       faceUrl: data.publicImageUrl || data.faceUrl
     };
     return this.postWithToken('/person/updateByFaceUrl', payload);
+  }
+
+  // Helper cập nhật Face ID theo (personID, faceUrl)
+  async updatePersonByFaceUrl(personID, faceUrl) {
+    if (typeof personID === 'object' && personID !== null) {
+      return this.updateByFaceUrl(personID);
+    }
+    return this.updateByFaceUrl({ personID, faceUrl });
+  }
+
+  // Đăng ký nhân sự qua URL ảnh (FaceUrl)
+  async registerPersonByUrl(data) {
+    const payload = {
+      placeID: this.placeId,
+      name: String(data.name || '').trim(),
+      aliasID: String(data.aliasID || '').trim().replace(/\s+/g, '_'),
+      title: String(data.title || 'Nhân viên').trim(),
+      faceUrl: data.faceUrl || data.publicImageUrl
+    };
+    if (data.departmentID) payload.departmentID = String(data.departmentID).trim();
+    return this.postWithToken('/person/registerByUrl', payload);
   }
 
   // Lấy danh sách nhân sự trực tiếp từ Cloud

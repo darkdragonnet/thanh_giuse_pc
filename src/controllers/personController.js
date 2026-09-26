@@ -2,6 +2,7 @@ const hanetService = require('../services/hanetService');
 const imageService = require('../services/imageService');
 const queueService = require('../services/queueService');
 const csvService = require('../services/csvService');
+const { getErrorMessage } = require('../utils/hanetErrorMap');
 
 // [READ] Danh sách Nhân sự từ Cloud
 exports.listPersons = async (req, res, next) => {
@@ -14,7 +15,9 @@ exports.listPersons = async (req, res, next) => {
     });
   } catch (err) {
     console.error('[List Error]', err.message);
-    req.flash('error', `Không thể lấy dữ liệu từ HANET Cloud: ${err.message}`);
+    const code = err.response?.data?.returnCode;
+    const msg = getErrorMessage(code, err.message);
+    req.flash('error', `Không thể lấy dữ liệu từ HANET Cloud: ${msg}`);
     res.render('person/list', { title: 'Danh sách Nhân sự', persons: [] });
   }
 };
@@ -70,6 +73,13 @@ exports.handleRegister = async (req, res, next) => {
     const { name, aliasID, title, departmentID, base64_image, source_csv, departmentName, lop } = req.body;
     const fileName = source_csv || req.body.file_name;
 
+    // Validate Họ tên bắt buộc
+    if (!name || !name.trim()) {
+      req.flash('error', 'Vui lòng nhập Họ và Tên.');
+      return res.redirect(fileName ? `/register/${fileName}` : '/register');
+    }
+
+    // Validate Ảnh bắt buộc
     if (!req.file && !base64_image) {
       req.flash('error', 'Vui lòng chụp hoặc tải ảnh khuôn mặt.');
       return res.redirect(fileName ? `/register/${fileName}` : '/register');
@@ -84,9 +94,9 @@ exports.handleRegister = async (req, res, next) => {
     const publicImageUrl = `${baseUrl.replace(/\/$/, '')}/uploads/${processedImage.filename}`;
 
     await queueService.enqueueRegisterPerson({
-      name,
-      aliasID,
-      title,
+      name: name.trim(),
+      aliasID: aliasID ? aliasID.trim() : '',
+      title: title ? title.trim() : 'Nhân viên',
       departmentID: departmentID || null,
       imagePath: processedImage.processedPath,
       imageFilename: processedImage.filename,
@@ -117,7 +127,9 @@ exports.handleRegister = async (req, res, next) => {
     res.redirect(fileName ? `/register/${fileName}` : '/');
   } catch (err) {
     console.error('[Register Error]', err.message);
-    req.flash('error', `Lỗi đăng ký: ${err.message}`);
+    const code = err.response?.data?.returnCode;
+    const msg = getErrorMessage(code, err.message);
+    req.flash('error', `Lỗi đăng ký: ${msg}`);
     const redirectUrl = req.body?.source_csv || req.body?.file_name;
     res.redirect(redirectUrl ? `/register/${redirectUrl}` : '/register');
   }
@@ -149,7 +161,9 @@ exports.renderEditForm = async (req, res, next) => {
     });
   } catch (err) {
     console.error('[Edit Form Error]', err.message);
-    req.flash('error', `Lỗi truy xuất thông tin nhân sự: ${err.message}`);
+    const code = err.response?.data?.returnCode;
+    const msg = getErrorMessage(code, err.message);
+    req.flash('error', `Lỗi truy xuất thông tin nhân sự: ${msg}`);
     res.redirect('/');
   }
 };
@@ -159,6 +173,12 @@ exports.handleUpdate = async (req, res, next) => {
   try {
     const { personID } = req.params;
     const { name, aliasID, title, departmentID, base64_image } = req.body;
+
+    // Validate Họ tên bắt buộc
+    if (!name || !name.trim()) {
+      req.flash('error', 'Vui lòng nhập Họ và Tên.');
+      return res.redirect(`/edit/${personID}`);
+    }
 
     // 1. Lấy thông tin person hiện tại để so sánh department
     const listRes = await hanetService.getListByPlace();
@@ -171,7 +191,14 @@ exports.handleUpdate = async (req, res, next) => {
     console.log(`[handleUpdate] Person ${personID} | oldDept=${oldDeptID} → newDept=${newDeptID}`);
 
     // 2. Cập nhật thông tin cơ bản + face nếu có (qua queue)
-    let updatePayload = { personID, name, aliasID, title };
+    let updatePayload = {
+      personID,
+      name: name.trim(),
+      aliasID: aliasID ? aliasID.trim() : '',
+      title: title ? title.trim() : 'Nhân viên',
+      departmentID: newDeptID || oldDeptID || null
+    };
+
     if (req.file || base64_image) {
       const processedImage = await imageService.processFaceImage({
         filePath: req.file ? req.file.path : null,
@@ -204,11 +231,13 @@ exports.handleUpdate = async (req, res, next) => {
         if (addRes.returnCode === 1) {
           deptMsg = ` Đã chuyển sang phòng ban mới.`;
         } else {
-          deptMsg = ` ⚠️ Gán phòng ban lỗi: ${addRes.returnMessage}`;
+          const errCode = addRes.returnCode;
+          deptMsg = ` ⚠️ Gán phòng ban lỗi: ${getErrorMessage(errCode, addRes.returnMessage)}`;
         }
       } catch (err) {
         console.error(`[handleUpdate] Lỗi add-person:`, err.message);
-        deptMsg = ` ⚠️ Lỗi gán phòng ban: ${err.message}`;
+        const code = err.response?.data?.returnCode;
+        deptMsg = ` ⚠️ Lỗi gán phòng ban: ${getErrorMessage(code, err.message)}`;
       }
     } else if (newDeptID === oldDeptID && newDeptID) {
       deptMsg = ' (Không thay đổi phòng ban).';
@@ -218,7 +247,9 @@ exports.handleUpdate = async (req, res, next) => {
     res.redirect('/');
   } catch (err) {
     console.error('[Update Error]', err.message);
-    req.flash('error', `Không thể cập nhật nhân sự: ${err.message}`);
+    const code = err.response?.data?.returnCode;
+    const msg = getErrorMessage(code, err.message);
+    req.flash('error', `Không thể cập nhật nhân sự: ${msg}`);
     res.redirect(`/edit/${req.params.personID}`);
   }
 };
@@ -233,13 +264,16 @@ exports.handleDelete = async (req, res, next) => {
     if (result.returnCode === 1) {
       req.flash('success', `Đã xóa thành công nhân sự ID "${personID}" khỏi HANET Cloud.`);
     } else {
-      req.flash('error', `Lỗi từ HANET Cloud [${result.returnCode}]: ${result.returnMessage}`);
+      const errorMsg = getErrorMessage(result.returnCode, result.returnMessage);
+      req.flash('error', `Lỗi từ HANET Cloud: ${errorMsg}`);
     }
 
     res.redirect('/');
   } catch (err) {
     console.error('[Delete Error]', err.message);
-    req.flash('error', `Không thể xóa nhân sự: ${err.message}`);
+    const code = err.response?.data?.returnCode;
+    const msg = getErrorMessage(code, err.message);
+    req.flash('error', `Không thể xóa nhân sự: ${msg}`);
     res.redirect('/');
   }
 };
@@ -260,7 +294,9 @@ exports.renderCheckin = async (req, res, next) => {
     });
   } catch (err) {
     console.error('[Checkin Error]', err.message);
-    req.flash('error', `Lỗi truy xuất lịch sử check-in: ${err.message}`);
+    const code = err.response?.data?.returnCode;
+    const msg = getErrorMessage(code, err.message);
+    req.flash('error', `Lỗi truy xuất lịch sử check-in: ${msg}`);
     res.render('person/checkin', { title: 'Nhật ký Check-in', logs: [] });
   }
 };
