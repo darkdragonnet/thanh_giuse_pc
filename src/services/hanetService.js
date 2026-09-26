@@ -103,9 +103,9 @@ class HanetService {
     formData.append('title', cleanTitle);
     formData.append('departmentID', cleanDepartmentID);
 
-    // Đọc file ảnh từ local path và đính kèm binary stream (field name: 'image')
+    // Đọc file ảnh từ local path và đính kèm binary stream (field name: 'file')
     if (data.imagePath && fs.existsSync(data.imagePath)) {
-      formData.append('image', fs.createReadStream(data.imagePath));
+      formData.append('file', fs.createReadStream(data.imagePath));
     } else {
       throw new Error('[HanetService] Không tìm thấy file ảnh tại đường dẫn để upload.');
     }
