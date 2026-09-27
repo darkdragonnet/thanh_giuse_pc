@@ -3,174 +3,164 @@ const fs = require('fs');
 const path = require('path');
 const hanetService = require('../src/services/hanetService');
 
-const DATA_DIR = path.join(__dirname, '../data');
-const ERROR_LOG = path.join(__dirname, '../error.log');
-
-// Chuẩn hóa tên (bỏ khoảng trắng thừa, chữ thường)
-function normalizeName(str) {
-  if (!str) return '';
-  return str.trim().toLowerCase().replace(/\s+/g, ' ');
+function normalizeName(name) {
+  if (!name) return '';
+  return name.toString().trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-// Bóc tách tên lớp từ aliasID và tìm file CSV tương ứng
-function extractClassAndFindCsv(aliasID, csvFiles) {
-  if (!aliasID) return null;
-  const parts = aliasID.trim().split('_');
-  if (parts.length < 2) return null;
+async function syncCloudToCsv() {
+  console.log('🔄 [Sync Tool] Bắt đầu đồng bộ dữ liệu hai chiều giữa HANET Cloud và các file CSV...\n');
 
-  // Lấy phần giữa: [TiềnTố]_[MãLớp]_[HậuTố] hoặc [MãLớp]_[HậuTố]
-  let classPart = '';
-  if (parts.length >= 3) {
-    classPart = parts.slice(1, parts.length - 1).join('_').toLowerCase();
-  } else {
-    classPart = parts[0].toLowerCase();
-  }
-
-  for (const file of csvFiles) {
-    const baseName = file.replace(/\.csv$/i, '').toLowerCase();
-    if (baseName === classPart || baseName.replace(/_/g, '') === classPart.replace(/_/g, '')) {
-      return file;
-    }
-  }
-  return null;
-}
-
-// Đọc và phân tích file CSV
-function parseCsv(filePath) {
-  const content = fs.readFileSync(filePath, 'utf-8');
-  const lines = content.split(/\r?\n/).filter(line => line.trim() !== '');
-  if (lines.length === 0) return { header: [], rows: [], rawHeader: '' };
-
-  const header = lines[0].split(',').map(h => h.trim());
-  const rows = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.trim().replace(/^"|"$/g, ''));
-    rows.push(cols);
-  }
-
-  return { header, rows, rawHeader: lines[0] };
-}
-
-// Ghi dữ liệu ra file CSV chuẩn
-function writeCsv(filePath, rawHeader, rows) {
-  const output = [rawHeader];
-  rows.forEach(r => {
-    const formatted = r.map(col => {
-      if (col === '' || col === undefined || col === null) return '""';
-      if (col.includes(',') || col.includes('"') || col.includes('http')) return `"${col}"`;
-      return col;
-    }).join(',');
-    output.push(formatted);
-  });
-  fs.writeFileSync(filePath, output.join('\n') + '\n', 'utf-8');
-}
-
-async function runSync() {
-  console.log('=== [BẮT ĐẦU ĐỒNG BỘ HANET CLOUD -> DATA CSV] ===\n');
-
-  if (!fs.existsSync(DATA_DIR)) {
-    console.error(`❌ Không tìm thấy thư mục: ${DATA_DIR}`);
+  const dataDir = path.join(process.cwd(), 'data');
+  if (!fs.existsSync(dataDir)) {
+    console.error('❌ Thư mục data không tồn tại:', dataDir);
     process.exit(1);
   }
 
-  fs.writeFileSync(ERROR_LOG, `--- ERROR LOG [${new Date().toISOString()}] ---\n`, 'utf-8');
-
+  // 1. Lấy toàn bộ danh sách từ Cloud
+  let cloudPersons = [];
   try {
-    console.log('1. Đang tải danh sách nhân sự từ HANET Cloud...');
     const res = await hanetService.getListByPlace();
-    const cloudPersons = res?.data || [];
-    console.log(`-> Đã lấy thành công ${cloudPersons.length} nhân sự từ Cloud.\n`);
+    cloudPersons = res?.data || [];
+    console.log(`📡 Đã tải thành công ${cloudPersons.length} nhân sự từ Cloud HANET.`);
+  } catch (err) {
+    console.error('❌ Lỗi khi gọi API HANET:', err.message);
+    process.exit(1);
+  }
 
-    const csvFiles = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.csv') && !f.includes('.bak'));
+  // Xây dựng bộ chỉ mục (Indexes) để tra cứu chính xác, chống trùng tên cho 2.000+ nhân sự
+  const cloudById = new Map();
+  const cloudByNameAndClass = new Map();
+  const cloudByName = new Map(); // danh sách mảng cho trường hợp trùng tên
 
-    const csvCache = {};
-    csvFiles.forEach(file => {
-      const fullPath = path.join(DATA_DIR, file);
-      csvCache[file] = {
-        path: fullPath,
-        ...parseCsv(fullPath),
-        isModified: false
-      };
-    });
+  cloudPersons.forEach(p => {
+    const pId = String(p.id || p.personID || '').trim();
+    const normName = normalizeName(p.name);
+    const alias = (p.aliasID || '').toLowerCase().trim();
+    const item = { ...p, id: pId };
 
-    let countUpdated = 0;
-    let countAppended = 0;
-    let countErrors = 0;
+    if (pId) {
+      cloudById.set(pId, item);
+    }
 
-    for (const person of cloudPersons) {
-      const { name, aliasID, personID, avatar } = person;
+    if (normName) {
+      if (!cloudByName.has(normName)) {
+        cloudByName.set(normName, []);
+      }
+      cloudByName.get(normName).push(item);
+    }
 
-      const matchedCsvFile = extractClassAndFindCsv(aliasID, csvFiles);
+    // Index theo key: "tên + mã lớp trong alias"
+    if (normName && alias) {
+      cloudByNameAndClass.set(`${normName}|${alias}`, item);
+    }
+  });
 
-      if (!matchedCsvFile) {
-        const errLine = `[LỖI MAP CSV] PersonID: ${personID} | Tên: ${name} | AliasID: ${aliasID || 'N/A'} -> Không tìm thấy file CSV phù hợp trong data/\n`;
-        fs.appendFileSync(ERROR_LOG, errLine, 'utf-8');
-        countErrors++;
-        continue;
+  // 2. Quét tất cả file CSV hợp lệ trong thư mục data (bỏ qua .bak, file ẩn)
+  const files = fs.readdirSync(dataDir)
+    .filter(f => f.endsWith('.csv') && !f.includes('.bak') && !f.startsWith('.') && !f.startsWith('._'))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
+  let totalUpdated = 0;
+  let totalCleared = 0;
+
+  for (const file of files) {
+    const filePath = path.join(dataDir, file);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split(/\r?\n/);
+    if (lines.length === 0) continue;
+
+    const className = file.replace(/\.csv$/i, '').trim().toLowerCase();
+    let fileModified = false;
+    let updatedInFile = 0;
+    let clearedInFile = 0;
+
+    const newLines = lines.map((line, idx) => {
+      const trimmed = line.trim();
+      if (!trimmed) return line;
+
+      // Giữ nguyên dòng tiêu đề
+      if (idx === 0 && trimmed.toLowerCase().startsWith('tên,')) {
+        return line;
       }
 
-      const csvData = csvCache[matchedCsvFile];
-      const rows = csvData.rows;
+      // Phân tích dòng CSV: [Tên, Lớp, Phòng Ban, Chức Vụ, links, PersonID]
+      const parts = trimmed.split(',');
+      if (parts.length < 4) return line;
 
-      const nameIdx = csvData.header.findIndex(h => /tên|ho_ten/i.test(h));
-      const linksIdx = csvData.header.findIndex(h => /links|ảnh|anh_url/i.test(h));
-      const pidIdx = csvData.header.findIndex(h => /personid|id/i.test(h));
+      const rawName = parts[0].trim();
+      const normName = normalizeName(rawName);
+      const currentAvatar = (parts[4] || '').replace(/^"|"$/g, '').trim();
+      const currentId = (parts[5] || '').trim();
 
-      const normCloudName = normalizeName(name);
-      let foundRow = null;
+      // --- TÌM KIẾM NHÂN SỰ TƯƠNG ỨNG TRÊN CLOUD (CHỐNG TRÙNG TÊN) ---
+      let matched = null;
 
-      for (const row of rows) {
-        if (normalizeName(row[nameIdx]) === normCloudName) {
-          foundRow = row;
-          break;
+      // 1. Ưu tiên tìm theo PersonID hiện có trên Cloud nếu ID hợp lệ
+      if (currentId && cloudById.has(currentId)) {
+        matched = cloudById.get(currentId);
+      }
+
+      // 2. Tìm theo cặp (Tên + Tên Lớp)
+      if (!matched) {
+        for (const [key, person] of cloudByNameAndClass.entries()) {
+          if (key.startsWith(`${normName}|`) && key.includes(className)) {
+            matched = person;
+            break;
+          }
         }
       }
 
-      if (foundRow) {
-        if (linksIdx !== -1 && avatar) foundRow[linksIdx] = avatar;
-        if (pidIdx !== -1 && personID) foundRow[pidIdx] = String(personID);
-        csvData.isModified = true;
-        countUpdated++;
+      // 3. Tìm theo Tên trong danh sách nếu chỉ có 1 người trùng tên trên toàn Cloud
+      if (!matched && cloudByName.has(normName)) {
+        const candidates = cloudByName.get(normName);
+        if (candidates.length === 1) {
+          matched = candidates[0];
+        } else {
+          // Nếu có nhiều người trùng tên, tìm người có alias gần khớp với lớp
+          matched = candidates.find(c => (c.aliasID || '').toLowerCase().includes(className)) || candidates[0];
+        }
+      }
+
+      // --- ĐỒNG BỘ 2 CHIỀU ---
+      if (matched && matched.id) {
+        // TRƯỜNG HỢP 1: Có trên Cloud -> Cập nhật URL ảnh và PersonID mới nhất
+        const cloudAvatar = matched.avatar || '';
+        const cloudId = String(matched.id);
+
+        if (currentAvatar !== cloudAvatar || currentId !== cloudId) {
+          parts[4] = cloudAvatar ? `"${cloudAvatar}"` : '""';
+          parts[5] = cloudId;
+          fileModified = true;
+          updatedInFile++;
+          totalUpdated++;
+          return parts.join(',');
+        }
       } else {
-        const lastRow = rows.length > 0 ? rows[rows.length - 1] : [];
-        const className = matchedCsvFile.replace(/\.csv$/i, '');
-        const deptName = lastRow[2] || (aliasID && aliasID.startsWith('LM_') ? 'Lêgiô Mariae' : 'Thiếu Nhi');
-        const titleName = lastRow[3] || 'Thành Viên';
-
-        const newRow = [
-          name,
-          className,
-          deptName,
-          titleName,
-          avatar || '',
-          String(personID)
-        ];
-
-        rows.push(newRow);
-        csvData.isModified = true;
-        countAppended++;
-        console.log(`[Thêm Mới] "${name}" -> ${matchedCsvFile}`);
+        // TRƯỜNG HỢP 2: Người này trước đây có PersonID/link trong CSV nhưng NAY ĐÃ BỊ XÓA trên Cloud
+        if (currentId || currentAvatar) {
+          parts[4] = '""';
+          parts[5] = '""';
+          fileModified = true;
+          clearedInFile++;
+          totalCleared++;
+          console.log(`⚠️ [Xóa/Reset ID] ${rawName} (${file}): Không còn trên Cloud HANET -> Đã xóa rỗng PersonID & Link.`);
+          return parts.join(',');
+        }
       }
+
+      return line;
+    });
+
+    if (fileModified) {
+      fs.writeFileSync(filePath, newLines.join('\n'), 'utf-8');
+      console.log(`✅ [${file}] Cập nhật: ${updatedInFile} | Đã reset: ${clearedInFile}`);
     }
-
-    console.log('\n2. Đang ghi dữ liệu vào các file CSV...');
-    for (const [fileName, fileData] of Object.entries(csvCache)) {
-      if (fileData.isModified) {
-        writeCsv(fileData.path, fileData.rawHeader, fileData.rows);
-        console.log(`   ✅ Đã cập nhật file: ${fileName}`);
-      }
-    }
-
-    console.log('\n=== [HOÀN TẤT ĐỒNG BỘ] ===');
-    console.log(`- Cập nhật Link/PersonID: ${countUpdated}`);
-    console.log(`- Thêm mới vào CSV:       ${countAppended}`);
-    console.log(`- Ngoại lệ / Lỗi:         ${countErrors} (Chi tiết trong error.log)`);
-
-  } catch (err) {
-    console.error('❌ Lỗi thực thi:', err.message);
-    fs.appendFileSync(ERROR_LOG, `[FATAL] ${err.stack}\n`, 'utf-8');
   }
+
+  console.log(`\n🎉 [Sync Tool Hoàn Tất]`);
+  console.log(`   - Tổng số nhân sự đã cập nhật link ảnh & PersonID: ${totalUpdated}`);
+  console.log(`   - Tổng số nhân sự đã reset do bị xóa trên Cloud: ${totalCleared}`);
 }
 
-runSync();
+syncCloudToCsv();
