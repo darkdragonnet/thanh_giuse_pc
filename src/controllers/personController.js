@@ -136,14 +136,16 @@ exports.handleRegister = async (req, res, next) => {
       return res.redirect(fileName ? `/register/${fileName}` : '/register');
     }
 
+    const uploadedFile = req.file || (req.files && req.files.length > 0 ? req.files[0] : null);
+
     // Validate Ảnh bắt buộc
-    if (!req.file && !base64_image) {
+    if (!uploadedFile && !base64_image) {
       req.flash('error', 'Vui lòng chụp hoặc tải ảnh khuôn mặt.');
       return res.redirect(fileName ? `/register/${fileName}` : '/register');
     }
 
     const processedImage = await imageService.processFaceImage({
-      filePath: req.file ? req.file.path : null,
+      filePath: uploadedFile ? uploadedFile.path : null,
       base64String: base64_image || null
     });
 
@@ -238,9 +240,10 @@ exports.handleUpdate = async (req, res, next) => {
       departmentID: newDeptID || oldDeptID || null
     };
 
-    if (req.file || base64_image) {
+    const uploadedUpdateFile = req.file || (req.files && req.files.length > 0 ? req.files[0] : null);
+    if (uploadedUpdateFile || base64_image) {
       const processedImage = await imageService.processFaceImage({
-        filePath: req.file ? req.file.path : null,
+        filePath: uploadedUpdateFile ? uploadedUpdateFile.path : null,
         base64String: base64_image || null
       });
       const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;

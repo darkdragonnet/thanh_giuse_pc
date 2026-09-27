@@ -18,11 +18,11 @@ router.get('/checkin', personController.renderCheckin);
 // [CREATE]
 router.get('/register/:file_name', personController.viewRegisterByFile);
 router.get('/register', personController.renderRegisterForm);
-router.post('/register', upload.single('face_image'), personController.handleRegister);
+router.post('/register', upload.any(), personController.handleRegister);
 
 // [UPDATE]
 router.get('/edit/:personID', personController.renderEditForm);
-router.put('/update/:personID', upload.single('face_image'), personController.handleUpdate);
+router.put('/update/:personID', upload.any(), personController.handleUpdate);
 
 // [DELETE]
 router.delete('/delete/:personID', personController.handleDelete);

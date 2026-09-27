@@ -129,13 +129,16 @@ async function writeBackRegistration(className, personName, avatarUrl, personId,
     }
 
     if (matchedIndex !== -1) {
-      // TRƯỜNG HỢP 1: Tên đã có -> Cập nhật đúng dòng đó (Cột 4 là links, Cột 5 là PersonID)
+      // TRƯỜNG HỢP 1: Tên đã có -> Cập nhật đúng dòng đó (Cột 3 là Chức vụ, Cột 4 là links, Cột 5 là PersonID)
       const parts = validLines[matchedIndex].split(',');
+      if (inputTitle && inputTitle.trim()) {
+        parts[3] = inputTitle.trim();
+      }
       parts[4] = avatarUrl ? `"${avatarUrl}"` : '""';
       parts[5] = String(personId);
       validLines[matchedIndex] = parts.join(',');
 
-      console.log(`✅ [CSV Write-Back] Đã cập nhật dòng ${matchedIndex + 1} cho: ${personName} trong ${cleanClassName}.csv`);
+      console.log(`✅ [CSV Write-Back] Đã cập nhật dòng ${matchedIndex + 1} cho: ${personName} (${parts[3]}) trong ${cleanClassName}.csv`);
     } else {
       // TRƯỜNG HỢP 2: Tên mới -> Kế thừa phòng ban & chức vụ từ người cuối cùng, thêm vào dòng Max + 1
       let inheritDept = 'Thiếu Nhi';
@@ -152,7 +155,7 @@ async function writeBackRegistration(className, personName, avatarUrl, personId,
       const newLine = `${personName.trim()},${cleanClassName},${inheritDept},${inheritTitle},"${avatarUrl || ''}",${String(personId)}`;
       validLines.push(newLine);
 
-      console.log(`🆕 [CSV Write-Back] Tên mới! Đã thêm vào dòng ${validLines.length} (Max + 1): ${personName} trong ${cleanClassName}.csv`);
+      console.log(`🆕 [CSV Write-Back] Tên mới! Đã thêm vào dòng ${validLines.length} (Max + 1): ${personName} (${inheritTitle}) trong ${cleanClassName}.csv`);
     }
 
     // Ghi đè lại file CSV an toàn với ký tự xuống dòng chuẩn

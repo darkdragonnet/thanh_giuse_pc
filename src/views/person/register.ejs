@@ -10,16 +10,6 @@
     <div class="card-body bg-light-subtle p-3 p-md-4">
       <form id="registerForm" action="/register" method="POST" enctype="multipart/form-data">
         
-        <!-- Lưu ý chụp ảnh chuẩn HANET -->
-        <div class="alert alert-info border-0 shadow-xs mb-4 p-3 rounded-3" role="alert">
-          <h6 class="alert-heading fw-bold mb-2"><i class="bi bi-info-circle-fill me-1"></i>Hướng Dẫn Chụp Ảnh Chuẩn:</h6>
-          <ul class="mb-0 small ps-3">
-            <li>Chụp <strong>chính diện, rõ mặt</strong>, mắt nhìn thẳng camera.</li>
-            <li>Đảm bảo môi trường <strong>đủ ánh sáng</strong>.</li>
-            <li><strong>KHÔNG</strong> đeo khẩu trang, kính đen, đội nón, và chỉ có 1 người trong khung hình.</li>
-          </ul>
-        </div>
-
         <div class="mb-3">
           <label for="nameInput" class="form-label fw-semibold text-secondary">Họ và Tên (*)</label>
           <input type="text" class="form-control form-control-lg cacheable-input" id="nameInput" name="name" placeholder="Ví dụ: Nguyễn Văn A" required>
@@ -49,15 +39,42 @@
           </select>
         </div>
         
+        <!-- KHU VỰC CHỌN VÀ CĂN CHỈNH ẢNH INTERACTIVE DRAG & ZOOM -->
         <div class="mb-4">
-          <label class="form-label fw-semibold text-secondary">Ảnh Khuôn Mặt (*)</label>
-          <!-- Nút kích hoạt Camera gốc (hỗ trợ Zalo In-App Browser) -->
-          <input type="file" class="form-control form-control-lg" id="avatarInput" accept="image/jpeg, image/png, image/jpg" capture="user" required>
-          <!-- Thẻ ẩn chứa file thực tế đã được chuẩn hóa 1280x738 -->
-          <input type="file" id="processedAvatarInput" name="face_image" style="display: none;">
+          <label class="form-label fw-bold">Ảnh Khuôn Mặt <span class="text-danger">*</span></label>
           
-          <div class="mt-3 text-center d-none" id="previewContainer">
-            <img id="imagePreview" src="" alt="Preview" class="img-thumbnail rounded-4 shadow-sm" style="max-height: 250px; object-fit: cover;">
+          <div class="alert alert-info py-2 px-3 small border-0 rounded-3 mb-2">
+            <i class="bi bi-info-circle-fill me-1"></i> <strong>Hướng dẫn:</strong> Chụp xong, bạn có thể <strong>dùng ngón tay kéo khuôn mặt</strong> vào giữa vòng tròn và <strong>chỉnh thanh trượt</strong> để phóng to rõ mặt.
+          </div>
+
+          <!-- Nút mở Camera / Chọn ảnh -->
+          <input type="file" id="cameraInput" accept="image/*" capture="user" class="d-none">
+          <button type="button" id="btnSelectPhoto" class="btn btn-outline-primary w-100 py-3 rounded-3 fw-semibold shadow-xs">
+            <i class="bi bi-camera display-6 d-block mb-1"></i>
+            <span id="btnText">Bấm Vào Đây Để Mở Camera Chụp Ảnh</span>
+          </button>
+
+          <!-- Khung Canvas tương tác Căn mặt 1280x738 -->
+          <div id="cropWrapper" class="mt-3 d-none">
+            <div class="position-relative rounded-4 overflow-hidden shadow-sm" style="width: 100%; aspect-ratio: 1280 / 738; background: #111; touch-action: none; cursor: grab;" id="canvasContainer">
+              <!-- Canvas vẽ ảnh và xử lý Drag -->
+              <canvas id="cropCanvas" width="1280" height="738" style="width: 100%; height: 100%; display: block;"></canvas>
+
+              <!-- Khung Oval Focus tiêu điểm đè lên trên -->
+              <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 44%; height: 76%; border: 3px dashed #00e676; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);">
+              </div>
+              
+              <div style="position: absolute; bottom: 8px; width: 100%; text-align: center; color: #fff; font-size: 13px; font-weight: 500; text-shadow: 0 1px 4px rgba(0,0,0,0.9); pointer-events: none;">
+                <i class="bi bi-arrows-move me-1"></i> Chạm kéo mặt vào giữa vòng tròn xanh
+              </div>
+            </div>
+
+            <!-- Thanh trượt Zoom phóng to / thu nhỏ -->
+            <div class="bg-light p-2 rounded-3 mt-2 border d-flex align-items-center gap-2">
+              <i class="bi bi-zoom-out text-secondary fs-5 ms-1"></i>
+              <input type="range" class="form-range" id="zoomRange" min="1" max="3" step="0.02" value="1">
+              <i class="bi bi-zoom-in text-secondary fs-5 me-1"></i>
+            </div>
           </div>
         </div>
 
@@ -70,144 +87,210 @@
 </div>
 
 <script>
-  document.addEventListener('DOMContentLoaded', () => {
-    const avatarInput = document.getElementById('avatarInput');
-    const processedAvatarInput = document.getElementById('processedAvatarInput');
-    const previewContainer = document.getElementById('previewContainer');
-    const imagePreview = document.getElementById('imagePreview');
-    const registerForm = document.getElementById('registerForm');
-    const submitBtn = document.getElementById('submitBtn');
+document.addEventListener('DOMContentLoaded', function () {
+  const cameraInput = document.getElementById('cameraInput');
+  const btnSelectPhoto = document.getElementById('btnSelectPhoto');
+  const btnText = document.getElementById('btnText');
+  const cropWrapper = document.getElementById('cropWrapper');
+  const canvasContainer = document.getElementById('canvasContainer');
+  const canvas = document.getElementById('cropCanvas');
+  const ctx = canvas.getContext('2d');
+  const zoomRange = document.getElementById('zoomRange');
+  const registerForm = document.getElementById('registerForm');
+  const submitBtn = document.getElementById('submitBtn');
 
-    // 1. Phục hồi và Lưu Trữ Dữ Liệu (Chống mất data khi Zalo App Switch)
-    const cacheableInputs = document.querySelectorAll('.cacheable-input');
-    
-    // Khôi phục dữ liệu
-    cacheableInputs.forEach(input => {
-      const cachedValue = sessionStorage.getItem(`cache_${input.id}`);
-      if (cachedValue) {
-        input.value = cachedValue;
-      }
-      
-      // Lưu lại khi người dùng gõ/chọn
-      input.addEventListener('input', () => {
-        sessionStorage.setItem(`cache_${input.id}`, input.value);
-      });
-      input.addEventListener('change', () => {
-        sessionStorage.setItem(`cache_${input.id}`, input.value);
-      });
-    });
-
-    // Xóa session nếu trang được load với flash message "success" (Thành công)
-    const successFlash = document.querySelector('.alert-success');
-    if (successFlash) {
-      cacheableInputs.forEach(input => sessionStorage.removeItem(`cache_${input.id}`));
+  // 1. Phục hồi và Lưu Trữ Dữ Liệu
+  const cacheableInputs = document.querySelectorAll('.cacheable-input');
+  cacheableInputs.forEach(input => {
+    const cachedValue = sessionStorage.getItem(`cache_${input.id}`);
+    if (cachedValue) {
+      input.value = cachedValue;
     }
-
-    // 2. Chuẩn hóa kích thước ảnh về đúng 1280 x 738 theo chuẩn HANET API
-    async function processImage(file) {
-      let bitmap;
-      try {
-        bitmap = await createImageBitmap(file);
-      } catch (e) {
-        bitmap = await new Promise((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => resolve(img);
-          img.onerror = reject;
-          img.src = URL.createObjectURL(file);
-        });
-      }
-
-      // Kích thước chuẩn bắt buộc của HANET
-      const TARGET_WIDTH = 1280;
-      const TARGET_HEIGHT = 738;
-      const TARGET_RATIO = TARGET_WIDTH / TARGET_HEIGHT; // ~1.734
-
-      const canvas = document.createElement("canvas");
-      canvas.width = TARGET_WIDTH;
-      canvas.height = TARGET_HEIGHT;
-      const ctx = canvas.getContext("2d");
-
-      // Tính toán vùng crop giữ trung tâm theo tỷ lệ 1280:738
-      const srcWidth = bitmap.width;
-      const srcHeight = bitmap.height;
-      const srcRatio = srcWidth / srcHeight;
-
-      let sWidth, sHeight, sx, sy;
-
-      if (srcRatio > TARGET_RATIO) {
-        // Ảnh gốc bè ngang hơn -> crop 2 bên
-        sHeight = srcHeight;
-        sWidth = srcHeight * TARGET_RATIO;
-        sx = (srcWidth - sWidth) / 2;
-        sy = 0;
-      } else {
-        // Ảnh gốc dài/dọc hơn (ảnh chụp đứng từ điện thoại) -> crop trên dưới
-        sWidth = srcWidth;
-        sHeight = srcWidth / TARGET_RATIO;
-        sx = 0;
-        sy = (srcHeight - sHeight) / 2;
-      }
-
-      // Vẽ ảnh vào Canvas 1280x738
-      ctx.drawImage(bitmap, sx, sy, sWidth, sHeight, 0, 0, TARGET_WIDTH, TARGET_HEIGHT);
-
-      return new Promise((resolve, reject) => {
-        canvas.toBlob(blob => {
-          if (!blob) return reject(new Error("Lỗi nén ảnh"));
-          const jpegFile = new File([blob], (file.name || "avatar").replace(/\.[^/.]+$/, "") + ".jpg", {
-            type: "image/jpeg",
-            lastModified: Date.now()
-          });
-          resolve({
-            jpegFile,
-            dataUrl: canvas.toDataURL("image/jpeg", 0.9)
-          });
-        }, "image/jpeg", 0.9);
-      });
-    }
-
-    // Xử lý sự kiện chọn ảnh
-    avatarInput.addEventListener('change', async function() {
-      const file = this.files[0];
-      if (file) {
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Đang xử lý ảnh chuẩn 1280x738...';
-        
-        try {
-          const result = await processImage(file);
-          
-          // Render preview nhanh
-          imagePreview.src = result.dataUrl;
-          previewContainer.classList.remove('d-none');
-
-          // Gắn file đã chuẩn hóa vào thẻ input ẩn để gửi lên server
-          const dataTransfer = new DataTransfer();
-          dataTransfer.items.add(result.jpegFile);
-          processedAvatarInput.files = dataTransfer.files;
-          
-          submitBtn.disabled = false;
-          submitBtn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-2"></i>Đăng Ký Nhận Diện';
-        } catch (err) {
-          alert('Không thể xử lý ảnh: ' + err.message);
-          submitBtn.disabled = false;
-          submitBtn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-2"></i>Đăng Ký Nhận Diện';
-        }
-      }
+    input.addEventListener('input', () => {
+      sessionStorage.setItem(`cache_${input.id}`, input.value);
     });
-
-    // Đảm bảo ngăn chặn submit nếu chưa chuẩn hóa xong
-    registerForm.addEventListener('submit', (e) => {
-      if (!processedAvatarInput.files.length) {
-        e.preventDefault();
-        alert('Vui lòng chọn hoặc chụp ảnh khuôn mặt!');
-      } else {
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Đang tải lên HANET Cloud...';
-      }
+    input.addEventListener('change', () => {
+      sessionStorage.setItem(`cache_${input.id}`, input.value);
     });
   });
-</script>
 
-<style>
-  .shadow-xs { box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-</style>
+  const successFlash = document.querySelector('.alert-success');
+  if (successFlash) {
+    cacheableInputs.forEach(input => sessionStorage.removeItem(`cache_${input.id}`));
+  }
+
+  let img = new Image();
+  let imgLoaded = false;
+
+  // Trạng thái biến đổi ảnh
+  let baseScale = 1;
+  let currentZoom = 1;
+  let posX = 0;
+  let posY = 0;
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+
+  btnSelectPhoto.addEventListener('click', () => cameraInput.click());
+
+  cameraInput.addEventListener('change', function (e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const objUrl = URL.createObjectURL(file);
+    img = new Image();
+    img.onload = function () {
+      URL.revokeObjectURL(objUrl);
+      imgLoaded = true;
+
+      // Khởi tạo tỷ lệ để ảnh phủ đầy khung 1280x738
+      const canvasRatio = 1280 / 738;
+      const imgRatio = img.naturalWidth / img.naturalHeight;
+
+      if (imgRatio > canvasRatio) {
+        baseScale = 738 / img.naturalHeight;
+      } else {
+        baseScale = 1280 / img.naturalWidth;
+      }
+
+      currentZoom = 1;
+      zoomRange.value = 1;
+
+      // Đặt ảnh ngay chính giữa canvas
+      posX = (1280 - img.naturalWidth * baseScale) / 2;
+      posY = (738 - img.naturalHeight * baseScale) / 2;
+
+      cropWrapper.classList.remove('d-none');
+      btnText.textContent = 'Chụp / Chọn Lại Ảnh Khác';
+      redraw();
+    };
+    img.src = objUrl;
+  });
+
+  function redraw() {
+    if (!imgLoaded) return;
+    ctx.clearRect(0, 0, 1280, 738);
+
+    const effectiveScale = baseScale * currentZoom;
+    const w = img.naturalWidth * effectiveScale;
+    const h = img.naturalHeight * effectiveScale;
+
+    ctx.drawImage(img, posX, posY, w, h);
+  }
+
+  // Zoom slider
+  zoomRange.addEventListener('input', function () {
+    const newZoom = parseFloat(this.value);
+    
+    // Zoom xoay quanh tâm Canvas (640, 369)
+    const centerX = 1280 / 2;
+    const centerY = 738 / 2;
+    const zoomFactor = newZoom / currentZoom;
+
+    posX = centerX - (centerX - posX) * zoomFactor;
+    posY = centerY - (centerY - posY) * zoomFactor;
+
+    currentZoom = newZoom;
+    redraw();
+  });
+
+  // Hỗ trợ Drag bằng Chuột (Desktop) & Touch (Mobile / Zalo)
+  function getEventCoords(e) {
+    if (e.touches && e.touches.length > 0) {
+      return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+    return { x: e.clientX, y: e.clientY };
+  }
+
+  function startDrag(e) {
+    if (!imgLoaded) return;
+    isDragging = true;
+    canvasContainer.style.cursor = 'grabbing';
+    const coords = getEventCoords(e);
+    startX = coords.x;
+    startY = coords.y;
+  }
+
+  function doDrag(e) {
+    if (!isDragging) return;
+    if (e.cancelable) e.preventDefault(); // Ngăn cuộn màn hình trên điện thoại
+
+    const coords = getEventCoords(e);
+    const rect = canvas.getBoundingClientRect();
+    const factor = 1280 / rect.width; // Chuyển đổi pixel màn hình sang pixel canvas 1280
+
+    const dx = (coords.x - startX) * factor;
+    const dy = (coords.y - startY) * factor;
+
+    posX += dx;
+    posY += dy;
+
+    startX = coords.x;
+    startY = coords.y;
+
+    redraw();
+  }
+
+  function endDrag() {
+    isDragging = false;
+    canvasContainer.style.cursor = 'grab';
+  }
+
+  // Gắn sự kiện chuột
+  canvasContainer.addEventListener('mousedown', startDrag);
+  window.addEventListener('mousemove', doDrag);
+  window.addEventListener('mouseup', endDrag);
+
+  // Gắn sự kiện chạm Touch
+  canvasContainer.addEventListener('touchstart', startDrag, { passive: false });
+  canvasContainer.addEventListener('touchmove', doDrag, { passive: false });
+  canvasContainer.addEventListener('touchend', endDrag);
+
+  // Submit Form: Xuất thẳng Canvas 1280x738 ra Blob JPEG
+  registerForm.addEventListener('submit', function (e) {
+    if (!imgLoaded) {
+      e.preventDefault();
+      alert('Vui lòng chụp ảnh khuôn mặt trước khi đăng ký!');
+      return;
+    }
+
+    e.preventDefault();
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Đang xử lý đăng ký...';
+
+    canvas.toBlob(function (blob) {
+      if (!blob) {
+        alert('Lỗi xử lý ảnh, vui lòng thử lại!');
+        submitBtn.disabled = false;
+        return;
+      }
+
+      const formData = new FormData(registerForm);
+      formData.set('face_image', blob, 'avatar.jpg');
+      formData.set('image', blob, 'avatar.jpg');
+
+      fetch(registerForm.action || window.location.href, {
+        method: 'POST',
+        body: formData
+      })
+      .then(res => {
+        if (res.redirected) {
+          window.location.href = res.url;
+        } else {
+          return res.text().then(html => {
+            document.open();
+            document.write(html);
+            document.close();
+          });
+        }
+      })
+      .catch(err => {
+        console.error('Lỗi nộp form:', err);
+        alert('Lỗi kết nối máy chủ, vui lòng thử lại!');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-2"></i>Đăng Ký Nhận Diện';
+      });
+    }, 'image/jpeg', 0.90);
+  });
+});
+</script>
