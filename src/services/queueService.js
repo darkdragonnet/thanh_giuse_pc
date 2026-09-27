@@ -2,6 +2,7 @@ const fs = require('fs');
 const Queue = require('bull');
 const hanetService = require('./hanetService');
 const imageService = require('./imageService');
+const csvService = require('./csvService');
 const { getErrorMessage } = require('../utils/hanetErrorMap');
 
 // Danh sách mã lỗi không thể phục hồi bằng retry tự động (lỗi tham số, lỗi ảnh, lỗi quyền)
@@ -29,13 +30,15 @@ const hanetQueue = new Queue('hanet-sync', {
 
 // Xử lý Job đăng ký nhân sự ngầm
 hanetQueue.process('register_person_job', 2, async (job) => {
-  const { name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename, source_csv } = job.data;
+  const { name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename, source_csv, className, class_name } = job.data;
+  const targetClass = source_csv || className || class_name || null;
   const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
   const faceUrl = publicImageUrl || (imageFilename ? `${fallbackBaseUrl}/uploads/${imageFilename}` : null);
 
   console.log(`[Queue register_person_job] Bắt đầu xử lý: ${name} (${aliasID})`);
 
   let finalPersonID = null;
+  let finalAvatarUrl = faceUrl;
 
   try {
     try {
@@ -63,7 +66,13 @@ hanetQueue.process('register_person_job', 2, async (job) => {
 
       if (registerRes && registerRes.returnCode === 1) {
         finalPersonID = registerRes.data?.personID || registerRes.data?.id;
+        finalAvatarUrl = registerRes.data?.avatar || registerRes.data?.faceUrl || faceUrl;
         console.log(`[Queue register_person_job] ✅ Đăng ký mới thành công: ${finalPersonID}`);
+
+        // Tự động ghi ngược thông tin đăng ký vào file CSV
+        if (targetClass && finalPersonID) {
+          await csvService.writeBackRegistration(targetClass, name, finalAvatarUrl, finalPersonID, title || '');
+        }
       } else if (registerRes && registerRes.returnCode === -9007 && (registerRes.data?.personID || registerRes.data?.id)) {
         // Trường hợp HANET trả HTTP 200 kèm returnCode -9007
         finalPersonID = registerRes.data?.personID || registerRes.data?.id;
@@ -88,6 +97,11 @@ hanetQueue.process('register_person_job', 2, async (job) => {
         } catch (infoErr) {
           const errCode = infoErr.response?.data?.returnCode;
           console.warn(`[Queue register_person_job] Cập nhật info thất bại:`, getErrorMessage(errCode, infoErr.message));
+        }
+
+        // Tự động ghi ngược thông tin đăng ký vào file CSV
+        if (targetClass && finalPersonID) {
+          await csvService.writeBackRegistration(targetClass, name, targetFaceUrl || finalAvatarUrl, finalPersonID, title || '');
         }
       } else {
         const errorMsg = getErrorMessage(registerRes?.returnCode, registerRes?.returnMessage);
@@ -129,6 +143,11 @@ hanetQueue.process('register_person_job', 2, async (job) => {
         } catch (infoErr) {
           const errCode = infoErr.response?.data?.returnCode;
           console.warn(`[Queue register_person_job] Cập nhật info thất bại:`, getErrorMessage(errCode, infoErr.message));
+        }
+
+        // Tự động ghi ngược thông tin đăng ký vào file CSV
+        if (targetClass && finalPersonID) {
+          await csvService.writeBackRegistration(targetClass, name, targetFaceUrl || finalAvatarUrl, finalPersonID, title || '');
         }
       } else {
         const errorMsg = getErrorMessage(code, apiErr.message);

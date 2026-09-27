@@ -3,21 +3,26 @@ const path = require('path');
 const csv = require('csv-parser');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 
-const DATA_DIR = path.join(__dirname, '../../data');
+const DATA_DIR = path.join(process.cwd(), 'data');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+function normalizeName(name) {
+  if (!name) return '';
+  return name.toString().trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
 /**
  * Lấy đường dẫn file CSV an toàn trong thư mục data
- * @param {string} fileName Tên file danh mục (vd: thieu_nhi)
+ * @param {string} fileName Tên file danh mục (vd: ThemSuc_1a, GLV)
  * @returns {string}
  */
-exports.getFilePath = (fileName) => {
-  const safeName = path.basename(fileName).replace(/\.csv$/, '');
+function getFilePath(fileName) {
+  const safeName = path.basename(fileName).replace(/\.csv$/i, '');
   return path.join(DATA_DIR, `${safeName}.csv`);
-};
+}
 
 /**
  * Đọc file CSV và chuẩn hóa key về dạng chuẩn nội bộ:
@@ -25,8 +30,8 @@ exports.getFilePath = (fileName) => {
  * @param {string} fileName 
  * @returns {Promise<Array<Object>>}
  */
-exports.readList = (fileName) => {
-  const filePath = exports.getFilePath(fileName);
+function readList(fileName) {
+  const filePath = getFilePath(fileName);
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(filePath)) {
       return resolve([]);
@@ -48,15 +53,15 @@ exports.readList = (fileName) => {
       .on('end', () => resolve(results))
       .on('error', (err) => reject(err));
   });
-};
+}
 
 /**
  * Ghi thêm thành viên mới theo đúng header gốc của CSV
  * @param {string} fileName
  * @param {Object} person
  */
-exports.appendPerson = async (fileName, person) => {
-  const filePath = exports.getFilePath(fileName);
+async function appendPerson(fileName, person) {
+  const filePath = getFilePath(fileName);
   const fileExists = fs.existsSync(filePath);
 
   const csvWriter = createCsvWriter({
@@ -80,4 +85,88 @@ exports.appendPerson = async (fileName, person) => {
     anh_url: person.anh_url || '',
     hanet_person_id: person.hanet_person_id || '',
   }]);
+}
+
+/**
+ * Tự động ghi ngược thông tin đăng ký vào file CSV
+ * @param {string} className Tên lớp/nhóm (VD: ThemSuc_1a, GLV, DMHCCC)
+ * @param {string} personName Họ và tên người đăng ký
+ * @param {string} avatarUrl Link ảnh từ HANET Cloud (https://static.hanet.ai/...)
+ * @param {string|number} personId ID cấp bởi HANET Cloud
+ * @param {string} inputTitle Chức vụ do người dùng nhập (nếu có)
+ */
+async function writeBackRegistration(className, personName, avatarUrl, personId, inputTitle = '') {
+  if (!className || !personName || !personId) {
+    console.warn('[CSV Service] Thiếu thông tin bắt buộc để ghi CSV:', { className, personName, personId });
+    return false;
+  }
+
+  const cleanClassName = className.replace(/\.csv$/i, '');
+  const filePath = path.join(DATA_DIR, `${cleanClassName}.csv`);
+
+  if (!fs.existsSync(filePath)) {
+    console.warn(`[CSV Service] Không tìm thấy file: ${filePath}`);
+    return false;
+  }
+
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split(/\r?\n/);
+    const validLines = lines.filter(l => l.trim().length > 0);
+
+    const targetNormName = normalizeName(personName);
+    let matchedIndex = -1;
+
+    // 1. Tìm xem tên đã có sẵn trong file CSV chưa
+    for (let i = 0; i < validLines.length; i++) {
+      if (i === 0 && validLines[i].toLowerCase().startsWith('tên,')) continue;
+      const parts = validLines[i].split(',');
+      const rowName = normalizeName(parts[0]);
+      if (rowName === targetNormName) {
+        matchedIndex = i;
+        break;
+      }
+    }
+
+    if (matchedIndex !== -1) {
+      // TRƯỜNG HỢP 1: Tên đã có -> Cập nhật đúng dòng đó (Cột 4 là links, Cột 5 là PersonID)
+      const parts = validLines[matchedIndex].split(',');
+      parts[4] = avatarUrl ? `"${avatarUrl}"` : '""';
+      parts[5] = String(personId);
+      validLines[matchedIndex] = parts.join(',');
+
+      console.log(`✅ [CSV Write-Back] Đã cập nhật dòng ${matchedIndex + 1} cho: ${personName} trong ${cleanClassName}.csv`);
+    } else {
+      // TRƯỜNG HỢP 2: Tên mới -> Kế thừa phòng ban & chức vụ từ người cuối cùng, thêm vào dòng Max + 1
+      let inheritDept = 'Thiếu Nhi';
+      let inheritTitle = inputTitle || 'Học Sinh';
+
+      if (validLines.length > 0) {
+        const lastLineParts = validLines[validLines.length - 1].split(',');
+        if (lastLineParts.length >= 4) {
+          inheritDept = lastLineParts[2]?.trim() || inheritDept;
+          inheritTitle = inputTitle || lastLineParts[3]?.trim() || inheritTitle;
+        }
+      }
+
+      const newLine = `${personName.trim()},${cleanClassName},${inheritDept},${inheritTitle},"${avatarUrl || ''}",${String(personId)}`;
+      validLines.push(newLine);
+
+      console.log(`🆕 [CSV Write-Back] Tên mới! Đã thêm vào dòng ${validLines.length} (Max + 1): ${personName} trong ${cleanClassName}.csv`);
+    }
+
+    // Ghi đè lại file CSV an toàn với ký tự xuống dòng chuẩn
+    fs.writeFileSync(filePath, validLines.join('\n') + '\n', 'utf-8');
+    return true;
+  } catch (error) {
+    console.error(`❌ [CSV Write-Back Error] Lỗi ghi file ${cleanClassName}.csv:`, error.message);
+    return false;
+  }
+}
+
+module.exports = {
+  getFilePath,
+  readList,
+  appendPerson,
+  writeBackRegistration
 };

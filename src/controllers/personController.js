@@ -157,27 +157,9 @@ exports.handleRegister = async (req, res, next) => {
       departmentID: departmentID || null,
       imagePath: processedImage.processedPath,
       imageFilename: processedImage.filename,
-      publicImageUrl
+      publicImageUrl,
+      source_csv: fileName || null
     });
-
-    // [CSV Integration] Tự động thêm người mới vào file CSV nếu đăng ký từ form /register/:file_name
-    if (fileName && name) {
-      csvService.readList(fileName).then(async (list) => {
-        const cleanName = name.trim().toLowerCase();
-        const exists = list.some(item => (item.ho_ten || '').trim().toLowerCase() === cleanName);
-        if (!exists) {
-          await csvService.appendPerson(fileName, {
-            ho_ten: name.trim(),
-            phong_ban: departmentName || req.body.phong_ban_name || 'Thiếu Nhi',
-            lop: lop || '',
-            chuc_vu: title || 'Học Sinh',
-            anh_url: '',
-            hanet_person_id: ''
-          });
-          console.log(`[CSV Append] Đã thêm thành viên mới "${name}" vào file data/${fileName}.csv`);
-        }
-      }).catch(e => console.warn('[CSV Append Warning]', e.message));
-    }
 
     const deptMsg = departmentID ? ' và gán vào phòng ban đã chọn' : '';
     req.flash('success', `Đã nhận yêu cầu đăng ký cho "${name}"${deptMsg}. Tiến trình xử lý đang chạy ngầm.`);
