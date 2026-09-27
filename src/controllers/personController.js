@@ -32,8 +32,26 @@ exports.viewLinks = (req, res) => {
 
     let links = [];
     if (fs.existsSync(targetDir)) {
+      // Danh sách đen các tên file rác cần loại bỏ tuyệt đối
+      const blacklist = ['mariae.csv', 'nhi.csv', 'thiếu.csv', 'lêgiô.csv', 'thieu.csv', 'legio.csv'];
+
       const files = fs.readdirSync(targetDir)
-        .filter(f => f.endsWith('.csv') && !f.includes('.bak'));
+        .filter(f => {
+          // 1. Phải là file đuôi .csv
+          if (!f.toLowerCase().endsWith('.csv')) return false;
+
+          // 2. Bỏ qua các file backup
+          if (f.toLowerCase().includes('.bak')) return false;
+
+          // 3. Bỏ qua file ẩn hệ thống (macOS ._ hoặc Linux .)
+          if (f.startsWith('.') || f.startsWith('._')) return false;
+
+          // 4. Bỏ qua các file trong danh sách đen
+          if (blacklist.includes(f.toLowerCase())) return false;
+
+          return true;
+        })
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
       const baseUrl = (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
 
@@ -49,13 +67,13 @@ exports.viewLinks = (req, res) => {
 
     res.render('links', {
       links,
-      title: 'Danh Sách Link Đăng Ký Face ID'
+      title: 'Danh Sách Link Đăng Ký Theo Lớp'
     });
   } catch (err) {
     console.error('[viewLinks Error]', err.message);
     res.render('links', {
       links: [],
-      title: 'Danh Sách Link Đăng Ký Face ID',
+      title: 'Danh Sách Link Đăng Ký Theo Lớp',
       error: 'Không thể tải danh sách link.'
     });
   }
@@ -221,11 +239,11 @@ exports.handleUpdate = async (req, res, next) => {
 
     // 1. Lấy thông tin person hiện tại để so sánh department
     const listRes = await hanetService.getListByPlace();
-    const person = listRes?.data?.find(p => String(p.personID) === String(personID));
+    const person = listRes?.data?.find(p => String(p.personID || p.id) === String(personID));
     const oldDeptID = person?.departmentID && String(person.departmentID) !== '0'
       ? String(person.departmentID)
       : null;
-    const newDeptID = departmentID ? String(departmentID) : null;
+    const newDeptID = departmentID && String(departmentID) !== '0' ? String(departmentID) : null;
 
     console.log(`[handleUpdate] Person ${personID} | oldDept=${oldDeptID} → newDept=${newDeptID}`);
 

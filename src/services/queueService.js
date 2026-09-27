@@ -4,6 +4,11 @@ const hanetService = require('./hanetService');
 const imageService = require('./imageService');
 const { getErrorMessage } = require('../utils/hanetErrorMap');
 
+// Danh sách mã lỗi không thể phục hồi bằng retry tự động (lỗi tham số, lỗi ảnh, lỗi quyền)
+const NON_RETRIABLE_CODES = new Set([
+  -1, -1005, -2035, -5005, -5006, -5010, -5011, -9002, -9005, -9006, -9008
+]);
+
 // Khởi tạo Bull Queue chạy trên Redis DB 4
 const hanetQueue = new Queue('hanet-sync', {
   redis: {
@@ -86,10 +91,19 @@ hanetQueue.process('register_person_job', 2, async (job) => {
         }
       } else {
         const errorMsg = getErrorMessage(registerRes?.returnCode, registerRes?.returnMessage);
+        const code = Number(registerRes?.returnCode);
+
+        // Kiểm tra nếu là lỗi vĩnh viễn (ảnh hỏng, sai tham số, trùng mã) -> không retry vô ích
+        if (NON_RETRIABLE_CODES.has(code)) {
+          console.error(`[Queue register_person_job] ❌ Lỗi không thể retry (Mã ${code}): ${errorMsg}`);
+          return { returnCode: code, returnMessage: errorMsg, error: true };
+        }
+
         throw new Error(`[Mã lỗi ${registerRes?.returnCode}]: ${errorMsg}`);
       }
     } catch (apiErr) {
       const errData = apiErr.response?.data;
+      const code = Number(errData?.returnCode || apiErr.code);
 
       // 2. Xử lý lỗi -9007: Người này / Khuôn mặt này đã tồn tại trên HANET
       if (errData && errData.returnCode === -9007 && (errData.data?.personID || errData.data?.id)) {
@@ -117,9 +131,16 @@ hanetQueue.process('register_person_job', 2, async (job) => {
           console.warn(`[Queue register_person_job] Cập nhật info thất bại:`, getErrorMessage(errCode, infoErr.message));
         }
       } else {
-        const code = errData?.returnCode || apiErr.code;
-        console.error(`[Queue register_person_job] Lỗi khi xử lý: ${getErrorMessage(code, apiErr.message)}`);
-        // Lỗi khác ngoài -9007 thì throw để Bull Queue retry
+        const errorMsg = getErrorMessage(code, apiErr.message);
+        console.error(`[Queue register_person_job] Lỗi khi xử lý: ${errorMsg}`);
+
+        // Nếu mã lỗi nằm trong danh sách không thể retry -> không ném lỗi tiếp
+        if (NON_RETRIABLE_CODES.has(code)) {
+          console.error(`[Queue register_person_job] ❌ Bỏ qua retry cho mã lỗi ${code}`);
+          return { returnCode: code, returnMessage: errorMsg, error: true };
+        }
+
+        // Lỗi kết nối / timeout -> ném ra để Bull Queue retry với exponential backoff
         throw apiErr;
       }
     }
@@ -162,6 +183,11 @@ hanetQueue.process('update_person_job', 3, async (job) => {
 
     if (infoResult.returnCode !== 1) {
       const errorMsg = getErrorMessage(infoResult.returnCode, infoResult.returnMessage);
+      const code = Number(infoResult.returnCode);
+      if (NON_RETRIABLE_CODES.has(code)) {
+        console.error(`[Queue update_person_job] ❌ Lỗi không thể retry (Mã ${code}): ${errorMsg}`);
+        return { returnCode: code, returnMessage: errorMsg, error: true };
+      }
       throw new Error(`[Mã lỗi ${infoResult.returnCode}]: ${errorMsg}`);
     }
 
@@ -187,6 +213,11 @@ hanetQueue.process('update_person_job', 3, async (job) => {
 
       if (faceResult.returnCode !== 1) {
         const errorMsg = getErrorMessage(faceResult.returnCode, faceResult.returnMessage);
+        const code = Number(faceResult.returnCode);
+        if (NON_RETRIABLE_CODES.has(code)) {
+          console.error(`[Queue update_person_job] ❌ Lỗi không thể retry khi cập nhật ảnh (Mã ${code}): ${errorMsg}`);
+          return { returnCode: code, returnMessage: errorMsg, error: true };
+        }
         throw new Error(`[Mã lỗi ${faceResult.returnCode}]: ${errorMsg}`);
       }
     }

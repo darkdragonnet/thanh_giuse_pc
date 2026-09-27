@@ -3,6 +3,15 @@ const qs = require('qs');
 const FormData = require('form-data');
 const fs = require('fs');
 
+// Cấu hình axios instance với timeout 25s và Accept header chuẩn
+const hanetAxios = axios.create({
+  baseURL: process.env.HANET_API_BASE || 'https://partner.hanet.ai',
+  timeout: 25000, // 25s (25.000ms) theo yêu cầu 10 - 30s của HANET
+  headers: {
+    'Accept': 'application/json'
+  }
+});
+
 class HanetService {
   constructor() {
     this.apiBase = process.env.HANET_API_BASE || 'https://partner.hanet.ai';
@@ -44,7 +53,10 @@ class HanetService {
             client_id: this.clientId,
             client_secret: this.clientSecret
           }),
-          { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+          {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+            timeout: 25000
+          }
         );
 
         this.accessToken = res.data.access_token;
@@ -68,8 +80,12 @@ class HanetService {
     const token = await this.getAccessToken(isRetry);
     const payload = { ...data, token };
 
-    const res = await axios.post(`${this.apiBase}${endpoint}`, qs.stringify(payload), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    const res = await hanetAxios.post(endpoint, qs.stringify(payload), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+      },
+      timeout: 25000
     });
 
     // Kiểm tra nếu mã lỗi là -103 (Token hết hạn) và chưa retry
@@ -111,13 +127,15 @@ class HanetService {
     }
 
     try {
-      // Gửi request với headers của form-data và vô hiệu hóa giới hạn kích thước body/content
-      const response = await axios.post(`${this.apiBase}/person/register`, formData, {
+      // Gửi request với axios instance, form-data headers, maxBodyLength/maxContentLength: Infinity và timeout 25s
+      const response = await hanetAxios.post('/person/register', formData, {
         headers: {
-          ...formData.getHeaders()
+          ...formData.getHeaders(),
+          'Accept': 'application/json'
         },
         maxBodyLength: Infinity,
-        maxContentLength: Infinity
+        maxContentLength: Infinity,
+        timeout: 25000
       });
 
       // Kiểm tra token hết hạn (Mã -103) và xoay vòng

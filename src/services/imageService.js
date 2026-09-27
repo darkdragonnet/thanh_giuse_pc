@@ -3,10 +3,58 @@ const path = require('path');
 const fs = require('fs');
 
 /**
+ * Chuẩn hóa ảnh dùng Sharp bảo đảm kích thước đầu ra đúng 1280 x 738
+ * @param {string} inputPath - Đường dẫn ảnh gốc
+ * @param {string} outputPath - Đường dẫn ảnh đầu ra
+ * @returns {Promise<string>}
+ */
+async function normalizeImage(inputPath, outputPath) {
+  const metadata = await sharp(inputPath).metadata();
+  if (!metadata.format) {
+    throw new Error('INVALID_IMAGE');
+  }
+
+  // Tự động xoay theo EXIF -> Resize cover 1280x738 -> Xuất JPEG chất lượng cao
+  await sharp(inputPath)
+    .rotate()
+    .resize(1280, 738, {
+      fit: 'cover',
+      position: 'center'
+    })
+    .jpeg({
+      quality: 90,
+      mozjpeg: true
+    })
+    .toFile(outputPath);
+
+  // Xóa file thô nếu lưu ra file mới
+  if (inputPath !== outputPath && fs.existsSync(inputPath)) {
+    try { fs.unlinkSync(inputPath); } catch (e) {}
+  }
+
+  return outputPath;
+}
+
+/**
+ * Xóa an toàn tệp tin nếu tồn tại
+ * @param {string} filePath 
+ */
+function deleteFileSafe(filePath) {
+  if (filePath && fs.existsSync(filePath)) {
+    try { fs.unlinkSync(filePath); } catch (e) {}
+  }
+}
+
+/**
  * Service xử lý ảnh chuyên biệt đa nền tảng
  * Chuẩn hóa tỷ lệ 1280x738, tự động xoay EXIF, nén JPEG 90%
  */
 class ImageService {
+  constructor() {
+    this.normalizeImage = normalizeImage;
+    this.deleteFileSafe = deleteFileSafe;
+  }
+
   /**
    * Xử lý file tải lên từ Multer hoặc chuỗi Base64
    * @param {Object} input - { filePath, base64String }
@@ -20,31 +68,30 @@ class ImageService {
       fs.mkdirSync(path.join(process.cwd(), 'uploads'), { recursive: true });
     }
 
-    let sharpInstance;
-
     if (input.filePath) {
-      sharpInstance = sharp(input.filePath);
+      await normalizeImage(input.filePath, outputPath);
     } else if (input.base64String) {
       const base64Data = input.base64String.replace(/^data:image\/\w+;base64,/, '');
       const buffer = Buffer.from(base64Data, 'base64');
-      sharpInstance = sharp(buffer);
+      
+      const metadata = await sharp(buffer).metadata();
+      if (!metadata.format) {
+        throw new Error('INVALID_IMAGE');
+      }
+
+      await sharp(buffer)
+        .rotate()
+        .resize(1280, 738, {
+          fit: 'cover',
+          position: 'center'
+        })
+        .jpeg({
+          quality: 90,
+          mozjpeg: true
+        })
+        .toFile(outputPath);
     } else {
       throw new Error('Dữ liệu ảnh đầu vào không hợp lệ');
-    }
-
-    // Pipeline chuẩn hóa ảnh cho HANET AI Cloud
-    await sharpInstance
-      .rotate() // Tự động xoay ảnh theo EXIF orientation (sửa lỗi Safari / Zalo In-App Browser)
-      .resize(1280, 738, {
-        fit: 'cover',
-        position: 'entropy' // Giữ vùng có mật độ chi tiết cao (khuôn mặt)
-      })
-      .jpeg({ quality: 90, chromaSubsampling: '4:4:4' })
-      .toFile(outputPath);
-
-    // Dọn dẹp file Multer gốc nếu có
-    if (input.filePath && fs.existsSync(input.filePath)) {
-      fs.unlinkSync(input.filePath);
     }
 
     return { processedPath: outputPath, filename };
@@ -55,13 +102,7 @@ class ImageService {
    * @param {string} filePath 
    */
   cleanup(filePath) {
-    try {
-      if (filePath && fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
-    } catch (err) {
-      console.warn(`[ImageService Cleanup Warning] Không thể xóa file ${filePath}:`, err.message);
-    }
+    deleteFileSafe(filePath);
   }
 
   /**
@@ -120,4 +161,10 @@ class ImageService {
   }
 }
 
-module.exports = new ImageService();
+const instance = new ImageService();
+instance.normalizeImage = normalizeImage;
+instance.deleteFileSafe = deleteFileSafe;
+
+module.exports = instance;
+module.exports.normalizeImage = normalizeImage;
+module.exports.deleteFileSafe = deleteFileSafe;
