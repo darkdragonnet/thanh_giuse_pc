@@ -1,0 +1,253 @@
+<div class="container py-4" style="max-width: 600px;">
+  <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
+    <div class="card-header bg-white py-3 border-0 d-flex align-items-center justify-content-between">
+      <h4 class="mb-0 fw-bold text-primary"><i class="bi bi-person-bounding-box me-2"></i>Đăng Ký Face ID</h4>
+      <a href="/links" class="btn btn-sm btn-outline-secondary rounded-pill px-3">
+        <i class="bi bi-link-45deg me-1"></i>Xem Theo Lớp
+      </a>
+    </div>
+    
+    <div class="card-body bg-light-subtle p-3 p-md-4">
+      <form id="registerForm" action="/register" method="POST" enctype="multipart/form-data">
+        
+        <div class="mb-3">
+          <label for="nameInput" class="form-label fw-semibold text-secondary">Họ và Tên (*)</label>
+          <input type="text" class="form-control form-control-lg cacheable-input" id="nameInput" name="name" placeholder="Ví dụ: Nguyễn Văn A" required>
+        </div>
+
+        <div class="mb-3">
+          <label for="aliasInput" class="form-label fw-semibold text-secondary">Mã NV / Alias ID (*)</label>
+          <input type="text" class="form-control cacheable-input" id="aliasInput" name="aliasID" placeholder="Ví dụ: NV_001" required>
+        </div>
+
+        <div class="mb-3">
+          <label for="titleInput" class="form-label fw-semibold text-secondary">Chức Vụ</label>
+          <input type="text" class="form-control cacheable-input" id="titleInput" name="title" placeholder="Ví dụ: Giáo Lý Viên / Học Sinh">
+        </div>
+
+        <div class="mb-3">
+          <label for="departmentSelect" class="form-label fw-semibold text-secondary">Phòng Ban (Tùy chọn)</label>
+          <select name="departmentID" id="departmentSelect" class="form-select cacheable-input">
+            <option value="">-- Chưa gán phòng ban --</option>
+            <% if (typeof departments !== 'undefined' && departments.length > 0) { %>
+              <% departments.forEach(dept => { %>
+                <option value="<%= dept.id %>">
+                  <%= dept.name %> (<%= dept.numEmployee || dept.num_employee || 0 %> thành viên)
+                </option>
+              <% }) %>
+            <% } %>
+          </select>
+        </div>
+        
+        <!-- VÙNG CHỤP ẢNH & PREVIEW TƯƠNG THÍCH SAFARI / ZALO -->
+        <div class="mb-4">
+          <label class="form-label fw-bold">Ảnh Khuôn Mặt <span class="text-danger">*</span></label>
+          <div class="alert alert-warning py-2 px-3 small border-0 rounded-3 mb-2">
+            <i class="bi bi-camera-fill me-1"></i> <strong>Yêu cầu:</strong> Chụp rõ mặt, nhìn thẳng, đủ sáng, không đeo kính đen/khẩu trang, chỉ 1 người trong hình.
+          </div>
+
+          <!-- Nút chụp ảnh tương thích Zalo / Safari -->
+          <input type="file" id="cameraInput" name="raw_image" accept="image/*" capture="user" class="form-control d-none">
+          <button type="button" id="btnSelectPhoto" class="btn btn-outline-primary w-100 py-3 rounded-3 fw-semibold">
+            <i class="bi bi-camera display-6 d-block mb-1"></i>
+            Bấm Vào Đây Để Mở Camera Chụp Ảnh
+          </button>
+
+          <!-- Khung Preview chuẩn tỷ lệ HANET 1280x738 -->
+          <div id="previewContainer" class="mt-3 position-relative rounded-4 overflow-hidden shadow-sm d-none" style="width: 100%; aspect-ratio: 1280 / 738; background: #000;">
+            <img id="previewImg" src="" alt="Preview" style="width: 100%; height: 100%; object-fit: cover; display: block;">
+            
+            <!-- Khung Oval chỉ dẫn khuôn mặt -->
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 45%; height: 75%; border: 2px dashed rgba(255, 255, 255, 0.85); border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);">
+            </div>
+            <div style="position: absolute; bottom: 8px; width: 100%; text-align: center; color: #fff; font-size: 12px; text-shadow: 0 1px 3px rgba(0,0,0,0.8); pointer-events: none;">
+              Căn khuôn mặt vào giữa khung bầu dục
+            </div>
+          </div>
+
+          <div id="processingIndicator" class="text-center py-2 text-primary small d-none">
+            <span class="spinner-border spinner-border-sm me-1" role="status"></span> Đang tối ưu ảnh cho camera nhận diện...
+          </div>
+        </div>
+
+        <button type="submit" id="submitBtn" class="btn btn-primary btn-lg w-100 rounded-pill shadow-sm fw-bold">
+          <i class="bi bi-cloud-arrow-up-fill me-2"></i>Đăng Ký Nhận Diện
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const cameraInput = document.getElementById('cameraInput');
+  const btnSelectPhoto = document.getElementById('btnSelectPhoto');
+  const previewContainer = document.getElementById('previewContainer');
+  const previewImg = document.getElementById('previewImg');
+  const processingIndicator = document.getElementById('processingIndicator');
+  const registerForm = document.getElementById('registerForm');
+  const submitBtn = document.getElementById('submitBtn');
+
+  let processedBlob = null;
+  let originalFile = null;
+
+  // 1. Phục hồi và Lưu Trữ Dữ Liệu
+  const cacheableInputs = document.querySelectorAll('.cacheable-input');
+  cacheableInputs.forEach(input => {
+    const cachedValue = sessionStorage.getItem(`cache_${input.id}`);
+    if (cachedValue) {
+      input.value = cachedValue;
+    }
+    input.addEventListener('input', () => {
+      sessionStorage.setItem(`cache_${input.id}`, input.value);
+    });
+    input.addEventListener('change', () => {
+      sessionStorage.setItem(`cache_${input.id}`, input.value);
+    });
+  });
+
+  const successFlash = document.querySelector('.alert-success');
+  if (successFlash) {
+    cacheableInputs.forEach(input => sessionStorage.removeItem(`cache_${input.id}`));
+  }
+
+  // 2. Kích hoạt chọn ảnh
+  btnSelectPhoto.addEventListener('click', function () {
+    cameraInput.click();
+  });
+
+  cameraInput.addEventListener('change', function (e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    originalFile = file;
+    processedBlob = null;
+
+    // Hiển thị Preview ngay lập tức bằng URL.createObjectURL (Safari & Zalo tương thích 100%)
+    const previewUrl = URL.createObjectURL(file);
+    previewImg.src = previewUrl;
+    previewContainer.classList.remove('d-none');
+    previewContainer.style.display = 'block';
+    btnSelectPhoto.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i> Chụp / Chọn Lại Ảnh Khác';
+
+    // Chạy Canvas nén ngầm về chuẩn 1280x738
+    if (processingIndicator) processingIndicator.classList.remove('d-none');
+    if (submitBtn) submitBtn.disabled = true;
+
+    processImageToBlob(file)
+      .then(blob => {
+        processedBlob = blob;
+      })
+      .catch(err => {
+        console.warn('Canvas nén lỗi hoặc Zalo chặn, dùng file gốc làm fallback:', err);
+        processedBlob = null; // Sẽ fallback dùng originalFile
+      })
+      .finally(() => {
+        if (processingIndicator) processingIndicator.classList.add('d-none');
+        if (submitBtn) submitBtn.disabled = false;
+      });
+  });
+
+  // Hàm nén ảnh bằng Image() truyền thống, không dùng createImageBitmap
+  function processImageToBlob(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+
+      img.onload = function () {
+        URL.revokeObjectURL(objectUrl);
+
+        const TARGET_WIDTH = 1280;
+        const TARGET_HEIGHT = 738;
+        const TARGET_RATIO = TARGET_WIDTH / TARGET_HEIGHT;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = TARGET_WIDTH;
+        canvas.height = TARGET_HEIGHT;
+        const ctx = canvas.getContext('2d');
+
+        const srcWidth = img.naturalWidth || img.width;
+        const srcHeight = img.naturalHeight || img.height;
+        const srcRatio = srcWidth / srcHeight;
+
+        let sWidth, sHeight, sx, sy;
+        if (srcRatio > TARGET_RATIO) {
+          sHeight = srcHeight;
+          sWidth = srcHeight * TARGET_RATIO;
+          sx = (srcWidth - sWidth) / 2;
+          sy = 0;
+        } else {
+          sWidth = srcWidth;
+          sHeight = srcWidth / TARGET_RATIO;
+          sx = 0;
+          sy = (srcHeight - sHeight) / 2;
+        }
+
+        ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, TARGET_WIDTH, TARGET_HEIGHT);
+
+        canvas.toBlob(function (blob) {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error('Canvas toBlob failed'));
+          }
+        }, 'image/jpeg', 0.88);
+      };
+
+      img.onerror = function (err) {
+        URL.revokeObjectURL(objectUrl);
+        reject(err);
+      };
+
+      img.src = objectUrl;
+    });
+  }
+
+  // Intercept Form Submit để đính kèm đúng Blob JPEG
+  registerForm.addEventListener('submit', function (e) {
+    if (!originalFile && !processedBlob) {
+      e.preventDefault();
+      alert('Vui lòng chụp ảnh khuôn mặt trước khi đăng ký!');
+      return;
+    }
+
+    // Nếu đã có processedBlob, đính kèm vào formData để gửi lên qua AJAX Fetch
+    if (processedBlob) {
+      e.preventDefault();
+      const formData = new FormData(registerForm);
+      // Ghi đè trường face_image và image bằng Blob chuẩn avatar.jpg
+      formData.set('face_image', processedBlob, 'avatar.jpg');
+      formData.set('image', processedBlob, 'avatar.jpg');
+
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Đang gửi đăng ký...';
+
+      fetch(registerForm.action || window.location.href, {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => {
+        if (response.redirected) {
+          window.location.href = response.url;
+        } else {
+          return response.text().then(html => {
+            document.open();
+            document.write(html);
+            document.close();
+          });
+        }
+      })
+      .catch(err => {
+        console.error('Lỗi gửi form:', err);
+        alert('Có lỗi xảy ra khi gửi dữ liệu. Vui lòng thử lại!');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-2"></i>Đăng Ký Nhận Diện';
+      });
+    } else {
+      // Fallback submit bình thường với originalFile
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Đang gửi đăng ký...';
+    }
+  });
+});
+</script>
