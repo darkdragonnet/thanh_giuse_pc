@@ -1,149 +1,227 @@
-<div class="container py-4" style="max-width: 600px;">
-  <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
-    <div class="card-header bg-white py-3 border-0 d-flex align-items-center justify-content-between">
-      <h4 class="mb-0 fw-bold text-primary"><i class="bi bi-person-bounding-box me-2"></i>Đăng Ký Face ID</h4>
-      <a href="/links" class="btn btn-sm btn-outline-secondary rounded-pill px-3">
-        <i class="bi bi-link-45deg me-1"></i>Xem Theo Lớp
-      </a>
-    </div>
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Đăng Ký Nhận Diện Khuôn Mặt - <%= className %></title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+  <style>
+    body {
+      background-color: #f4f6f9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .register-card {
+      max-width: 520px;
+      margin: 20px auto;
+      border-radius: 16px;
+      border: none;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+      background: #ffffff;
+    }
+    .canvas-container {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1280 / 738;
+      background: #111;
+      border-radius: 12px;
+      overflow: hidden;
+      touch-action: none;
+      cursor: grab;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .canvas-container:active {
+      cursor: grabbing;
+    }
+    .focus-oval {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 44%;
+      height: 76%;
+      border: 3px dashed #00e676;
+      border-radius: 50%;
+      pointer-events: none;
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+    }
+    .guide-text {
+      position: absolute;
+      bottom: 8px;
+      width: 100%;
+      text-align: center;
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 500;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.9);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container px-3 py-2">
+  <div class="card register-card p-4">
     
-    <div class="card-body bg-light-subtle p-3 p-md-4">
-      <form id="registerForm" action="/register" method="POST" enctype="multipart/form-data">
-        
-        <div class="mb-3">
-          <label for="nameInput" class="form-label fw-semibold text-secondary">Họ và Tên (*)</label>
-          <input type="text" class="form-control form-control-lg cacheable-input" id="nameInput" name="name" placeholder="Ví dụ: Nguyễn Văn A" required>
-        </div>
-
-        <div class="mb-3">
-          <label for="aliasInput" class="form-label fw-semibold text-secondary">Mã NV / Alias ID (*)</label>
-          <input type="text" class="form-control cacheable-input" id="aliasInput" name="aliasID" placeholder="Ví dụ: NV_001" required>
-        </div>
-
-        <div class="mb-3">
-          <label for="titleInput" class="form-label fw-semibold text-secondary">Chức Vụ</label>
-          <input type="text" class="form-control cacheable-input" id="titleInput" name="title" placeholder="Ví dụ: Giáo Lý Viên / Học Sinh">
-        </div>
-
-        <div class="mb-3">
-          <label for="departmentSelect" class="form-label fw-semibold text-secondary">Phòng Ban (Tùy chọn)</label>
-          <select name="departmentID" id="departmentSelect" class="form-select cacheable-input">
-            <option value="">-- Chưa gán phòng ban --</option>
-            <% if (typeof departments !== 'undefined' && departments.length > 0) { %>
-              <% departments.forEach(dept => { %>
-                <option value="<%= dept.id %>">
-                  <%= dept.name %> (<%= dept.numEmployee || dept.num_employee || 0 %> thành viên)
-                </option>
-              <% }) %>
-            <% } %>
-          </select>
-        </div>
-        
-        <!-- KHU VỰC CHỌN VÀ CĂN CHỈNH ẢNH INTERACTIVE DRAG & ZOOM -->
-        <div class="mb-4">
-          <label class="form-label fw-bold">Ảnh Khuôn Mặt <span class="text-danger">*</span></label>
-          
-          <div class="alert alert-info py-2 px-3 small border-0 rounded-3 mb-3">
-            <i class="bi bi-info-circle-fill me-1"></i> <strong>Hướng dẫn:</strong> Bạn có thể chụp mới hoặc tải ảnh có sẵn từ máy. Sau đó <strong>dùng ngón tay kéo khuôn mặt</strong> vào giữa vòng tròn và <strong>chỉnh thanh trượt</strong> để phóng to rõ mặt.
-          </div>
-
-          <!-- 2 Input File ẩn -->
-          <input type="file" id="cameraInput" accept="image/*" capture="user" class="d-none">
-          <input type="file" id="galleryInput" accept="image/*" class="d-none">
-
-          <!-- Cụm 2 nút lựa chọn -->
-          <div class="row g-2 mb-2" id="actionBtnGroup">
-            <div class="col-6">
-              <button type="button" id="btnCamera" class="btn btn-outline-primary w-100 py-3 rounded-3 fw-semibold shadow-xs h-100">
-                <i class="bi bi-camera display-6 d-block mb-1"></i>
-                <span>Chụp Ảnh Mới</span>
-              </button>
-            </div>
-            <div class="col-6">
-              <button type="button" id="btnGallery" class="btn btn-outline-success w-100 py-3 rounded-3 fw-semibold shadow-xs h-100">
-                <i class="bi bi-images display-6 d-block mb-1 text-success"></i>
-                <span>Tải Ảnh Từ Máy</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- Khung Canvas tương tác Căn mặt 1280x738 -->
-          <div id="cropWrapper" class="mt-3 d-none">
-            <div class="position-relative rounded-4 overflow-hidden shadow-sm" style="width: 100%; aspect-ratio: 1280 / 738; background: #111; touch-action: none; cursor: grab;" id="canvasContainer">
-              <!-- Canvas vẽ ảnh và xử lý Drag -->
-              <canvas id="cropCanvas" width="1280" height="738" style="width: 100%; height: 100%; display: block;"></canvas>
-
-              <!-- Khung Oval Focus tiêu điểm đè lên trên -->
-              <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 44%; height: 76%; border: 3px dashed #00e676; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);">
-              </div>
-              
-              <div style="position: absolute; bottom: 8px; width: 100%; text-align: center; color: #fff; font-size: 13px; font-weight: 500; text-shadow: 0 1px 4px rgba(0,0,0,0.9); pointer-events: none;">
-                <i class="bi bi-arrows-move me-1"></i> Dùng tay kéo khuôn mặt vào giữa vòng tròn
-              </div>
-            </div>
-
-            <!-- Thanh trượt Zoom phóng to / thu nhỏ -->
-            <div class="bg-light p-2 rounded-3 mt-2 border d-flex align-items-center gap-2">
-              <i class="bi bi-zoom-out text-secondary fs-5 ms-1"></i>
-              <input type="range" class="form-range" id="zoomRange" min="1" max="3" step="0.02" value="1">
-              <i class="bi bi-zoom-in text-secondary fs-5 me-1"></i>
-            </div>
-
-            <div class="text-center mt-2">
-              <button type="button" id="btnChangePhoto" class="btn btn-sm btn-link text-decoration-none text-muted">
-                <i class="bi bi-arrow-repeat me-1"></i> Chụp hoặc chọn ảnh khác
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <button type="submit" id="submitBtn" class="btn btn-primary btn-lg w-100 rounded-pill shadow-sm fw-bold">
-          <i class="bi bi-cloud-arrow-up-fill me-2"></i>Đăng Ký Nhận Diện
-        </button>
-      </form>
+    <div class="text-center mb-3">
+      <div class="d-inline-flex align-items-center justify-content-center bg-primary-subtle text-primary rounded-circle mb-2" style="width: 54px; height: 54px;">
+        <i class="bi bi-person-bounding-box fs-3"></i>
+      </div>
+      <h4 class="fw-bold text-dark mb-1">Đăng Ký Khuôn Mặt Face ID</h4>
+      <span class="badge bg-primary px-3 py-2 fs-6 rounded-pill"><%= className %></span>
     </div>
+
+    <% if (typeof messages !== 'undefined' && messages.error) { %>
+      <div class="alert alert-danger alert-dismissible fade show rounded-3 py-2 small" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-1"></i> <%= messages.error %>
+        <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+      </div>
+    <% } %>
+    <% if (typeof messages !== 'undefined' && messages.success) { %>
+      <div class="alert alert-success alert-dismissible fade show rounded-3 py-2 small" role="alert">
+        <i class="bi bi-check-circle-fill me-1"></i> <%= messages.success %>
+        <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+      </div>
+    <% } %>
+
+    <form id="registerForm" action="/register/<%= className %>" method="POST" enctype="multipart/form-data">
+      
+      <div class="mb-3">
+        <label for="personSelect" class="form-label fw-bold text-dark">Họ và Tên Nhân Sự / Học Viên <span class="text-danger">*</span></label>
+        <% if (typeof persons !== 'undefined' && persons.length > 0) { %>
+          <select class="form-select form-select-lg rounded-3 mb-2" id="personSelect" name="personName">
+            <option value="">-- Chọn tên trong danh sách lớp --</option>
+            <% (persons || []).forEach(function(p) { %>
+              <option value="<%= p.name %>" data-title="<%= p.title || '' %>">
+                <%= p.name %> <%= p.hasFace ? '✔ (Đã có ảnh - Bấm để chụp lại)' : '' %>
+              </option>
+            <% }); %>
+            <option value="__custom__">+ Nhập họ và tên mới (nếu chưa có)</option>
+          </select>
+          <input type="text" class="form-control form-control-lg rounded-3 d-none" id="customNameInput" placeholder="Nhập đầy đủ Tên Thánh - Họ và Tên">
+        <% } else { %>
+          <input type="text" class="form-control form-control-lg rounded-3" name="personName" placeholder="Ví dụ: GIUSE Nguyễn Văn A" required>
+        <% } %>
+      </div>
+
+      <div class="mb-3">
+        <label for="titleInput" class="form-label fw-bold text-dark">Chức Vụ / Vai Trò</label>
+        <input type="text" class="form-control rounded-3" id="titleInput" name="title" value="<%= defaultTitle || '' %>" placeholder="Tự động nhận theo lớp">
+      </div>
+
+      <div class="mb-4">
+        <label class="form-label fw-bold text-dark">Ảnh Khuôn Mặt <span class="text-danger">*</span></label>
+        
+        <div class="alert alert-info py-2 px-3 small border-0 rounded-3 mb-3">
+          <i class="bi bi-info-circle-fill me-1"></i> <strong>Hướng dẫn:</strong> Chụp mới hoặc tải ảnh từ máy. Sau đó <strong>dùng ngón tay kéo khuôn mặt</strong> vào giữa vòng tròn và <strong>kéo thanh trượt</strong> để phóng to rõ mặt.
+        </div>
+
+        <input type="file" id="cameraInput" accept="image/*" capture="user" class="d-none">
+        <input type="file" id="galleryInput" accept="image/*" class="d-none">
+
+        <div class="row g-2 mb-2" id="actionBtnGroup">
+          <div class="col-6">
+            <button type="button" id="btnCamera" class="btn btn-outline-primary w-100 py-3 rounded-3 fw-semibold shadow-xs h-100">
+              <i class="bi bi-camera display-6 d-block mb-1"></i>
+              <span>Chụp Ảnh Mới</span>
+            </button>
+          </div>
+          <div class="col-6">
+            <button type="button" id="btnGallery" class="btn btn-outline-success w-100 py-3 rounded-3 fw-semibold shadow-xs h-100">
+              <i class="bi bi-images display-6 d-block mb-1 text-success"></i>
+              <span>Tải Ảnh Từ Máy</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="cropWrapper" class="mt-2 d-none">
+          <div class="canvas-container shadow-sm" id="canvasContainer">
+            <canvas id="cropCanvas" width="1280" height="738" style="width: 100%; height: 100%; display: block;"></canvas>
+            <div class="focus-oval"></div>
+            <div class="guide-text">
+              <i class="bi bi-arrows-move me-1"></i> Chạm vuốt kéo mặt vào giữa vòng tròn
+            </div>
+          </div>
+
+          <div class="bg-light p-2 rounded-3 mt-2 border d-flex align-items-center gap-2">
+            <i class="bi bi-zoom-out text-secondary fs-5 ms-1"></i>
+            <input type="range" class="form-range" id="zoomRange" min="1" max="3.5" step="0.02" value="1">
+            <i class="bi bi-zoom-in text-secondary fs-5 me-1"></i>
+          </div>
+
+          <div class="text-center mt-2">
+            <button type="button" id="btnChangePhoto" class="btn btn-sm btn-link text-decoration-none text-muted">
+              <i class="bi bi-arrow-repeat me-1"></i> Chụp hoặc chọn lại ảnh khác
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <button type="submit" id="submitBtn" class="btn btn-primary w-100 py-3 rounded-3 fw-bold fs-6 shadow-sm">
+        <i class="bi bi-cloud-arrow-up-fill me-1"></i> Đăng Ký Nhận Diện
+      </button>
+
+    </form>
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+  const personSelect = document.getElementById('personSelect');
+  const customNameInput = document.getElementById('customNameInput');
+  const titleInput = document.getElementById('titleInput');
+  
   const cameraInput = document.getElementById('cameraInput');
   const galleryInput = document.getElementById('galleryInput');
   const btnCamera = document.getElementById('btnCamera');
   const btnGallery = document.getElementById('btnGallery');
   const btnChangePhoto = document.getElementById('btnChangePhoto');
   const actionBtnGroup = document.getElementById('actionBtnGroup');
+  
   const cropWrapper = document.getElementById('cropWrapper');
   const canvasContainer = document.getElementById('canvasContainer');
   const canvas = document.getElementById('cropCanvas');
   const ctx = canvas.getContext('2d');
   const zoomRange = document.getElementById('zoomRange');
+  
   const registerForm = document.getElementById('registerForm');
   const submitBtn = document.getElementById('submitBtn');
 
-  // 1. Phục hồi và Lưu Trữ Dữ Liệu
-  const cacheableInputs = document.querySelectorAll('.cacheable-input');
-  cacheableInputs.forEach(input => {
-    const cachedValue = sessionStorage.getItem(`cache_${input.id}`);
-    if (cachedValue) {
-      input.value = cachedValue;
-    }
-    input.addEventListener('input', () => {
-      sessionStorage.setItem(`cache_${input.id}`, input.value);
+  if (personSelect) {
+    personSelect.addEventListener('change', function () {
+      if (this.value === '__custom__') {
+        customNameInput.classList.remove('d-none');
+        customNameInput.required = true;
+        customNameInput.name = 'personName';
+        personSelect.name = '';
+      } else {
+        if (customNameInput) {
+          customNameInput.classList.add('d-none');
+          customNameInput.required = false;
+        }
+        personSelect.name = 'personName';
+        const opt = personSelect.options[personSelect.selectedIndex];
+        const title = opt ? opt.getAttribute('data-title') : '';
+        if (title && titleInput) titleInput.value = title;
+      }
     });
-    input.addEventListener('change', () => {
-      sessionStorage.setItem(`cache_${input.id}`, input.value);
-    });
-  });
+  }
 
-  const successFlash = document.querySelector('.alert-success');
-  if (successFlash) {
-    cacheableInputs.forEach(input => sessionStorage.removeItem(`cache_${input.id}`));
+  btnCamera.addEventListener('click', () => cameraInput.click());
+  btnGallery.addEventListener('click', () => galleryInput.click());
+
+  if (btnChangePhoto) {
+    btnChangePhoto.addEventListener('click', () => {
+      cropWrapper.classList.add('d-none');
+      actionBtnGroup.classList.remove('d-none');
+    });
   }
 
   let img = new Image();
   let imgLoaded = false;
-
   let baseScale = 1;
   let currentZoom = 1;
   let posX = 0;
@@ -152,27 +230,10 @@ document.addEventListener('DOMContentLoaded', function () {
   let startX = 0;
   let startY = 0;
 
-  // Bấm nút Mở Camera
-  btnCamera.addEventListener('click', () => cameraInput.click());
+  cameraInput.addEventListener('change', handleImageSelect);
+  galleryInput.addEventListener('change', handleImageSelect);
 
-  // Bấm nút Chọn Ảnh từ Album / Thư viện máy
-  btnGallery.addEventListener('click', () => galleryInput.click());
-
-  // Nút Chọn lại ảnh
-  if (btnChangePhoto) {
-    btnChangePhoto.addEventListener('click', () => {
-      cropWrapper.classList.add('d-none');
-      actionBtnGroup.classList.remove('d-none');
-      cameraInput.value = '';
-      galleryInput.value = '';
-    });
-  }
-
-  // Lắng nghe sự kiện chọn file từ cả 2 nguồn
-  cameraInput.addEventListener('change', handleFileSelected);
-  galleryInput.addEventListener('change', handleFileSelected);
-
-  function handleFileSelected(e) {
+  function handleImageSelect(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
 
@@ -182,23 +243,25 @@ document.addEventListener('DOMContentLoaded', function () {
       URL.revokeObjectURL(objUrl);
       imgLoaded = true;
 
-      const canvasRatio = 1280 / 738;
+      const TARGET_W = 1280;
+      const TARGET_H = 738;
+      const targetRatio = TARGET_W / TARGET_H;
       const imgRatio = img.naturalWidth / img.naturalHeight;
 
-      if (imgRatio > canvasRatio) {
-        baseScale = 738 / img.naturalHeight;
+      if (imgRatio > targetRatio) {
+        baseScale = TARGET_H / img.naturalHeight;
       } else {
-        baseScale = 1280 / img.naturalWidth;
+        baseScale = TARGET_W / img.naturalWidth;
       }
 
       currentZoom = 1;
       zoomRange.value = 1;
 
-      posX = (1280 - img.naturalWidth * baseScale) / 2;
-      posY = (738 - img.naturalHeight * baseScale) / 2;
+      posX = (TARGET_W - img.naturalWidth * baseScale) / 2;
+      posY = (TARGET_H - img.naturalHeight * baseScale) / 2;
 
       cropWrapper.classList.remove('d-none');
-      actionBtnGroup.classList.add('d-none'); // Ẩn cụm nút chọn khi đã có ảnh
+      actionBtnGroup.classList.add('d-none');
       redraw();
     };
     img.src = objUrl;
@@ -208,14 +271,13 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!imgLoaded) return;
     ctx.clearRect(0, 0, 1280, 738);
 
-    const effectiveScale = baseScale * currentZoom;
-    const w = img.naturalWidth * effectiveScale;
-    const h = img.naturalHeight * effectiveScale;
+    const effScale = baseScale * currentZoom;
+    const w = img.naturalWidth * effScale;
+    const h = img.naturalHeight * effScale;
 
     ctx.drawImage(img, posX, posY, w, h);
   }
 
-  // Zoom slider
   zoomRange.addEventListener('input', function () {
     const newZoom = parseFloat(this.value);
     const centerX = 1280 / 2;
@@ -229,7 +291,6 @@ document.addEventListener('DOMContentLoaded', function () {
     redraw();
   });
 
-  // Xử lý kéo thả (Pan / Drag) trên cả Mobile Touch và Desktop Mouse
   function getCoords(e) {
     if (e.touches && e.touches.length > 0) {
       return { x: e.touches[0].clientX, y: e.touches[0].clientY };
@@ -240,7 +301,6 @@ document.addEventListener('DOMContentLoaded', function () {
   function startDrag(e) {
     if (!imgLoaded) return;
     isDragging = true;
-    canvasContainer.style.cursor = 'grabbing';
     const c = getCoords(e);
     startX = c.x;
     startY = c.y;
@@ -268,40 +328,36 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function endDrag() {
     isDragging = false;
-    canvasContainer.style.cursor = 'grab';
   }
 
-  // Chuột (Desktop Chrome/Safari)
   canvasContainer.addEventListener('mousedown', startDrag);
   window.addEventListener('mousemove', doDrag);
   window.addEventListener('mouseup', endDrag);
 
-  // Cảm ứng (Mobile Safari / Zalo In-App Browser)
   canvasContainer.addEventListener('touchstart', startDrag, { passive: false });
   canvasContainer.addEventListener('touchmove', doDrag, { passive: false });
   canvasContainer.addEventListener('touchend', endDrag);
 
-  // Submit Form: Xuất thẳng vùng Canvas đã căn chỉnh ra JPEG Blob 1280x738
   registerForm.addEventListener('submit', function (e) {
     if (!imgLoaded) {
       e.preventDefault();
-      alert('Vui lòng chụp ảnh hoặc tải ảnh khuôn mặt trước khi đăng ký!');
+      alert('Vui lòng chụp ảnh hoặc chọn ảnh khuôn mặt trước khi đăng ký!');
       return;
     }
 
     e.preventDefault();
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Đang xử lý đăng ký...';
+    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Đang tải lên và nhận diện...';
 
     canvas.toBlob(function (blob) {
       if (!blob) {
         alert('Lỗi xử lý ảnh, vui lòng thử lại!');
         submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-1"></i> Đăng Ký Nhận Diện';
         return;
       }
 
       const formData = new FormData(registerForm);
-      formData.set('face_image', blob, 'avatar.jpg');
       formData.set('image', blob, 'avatar.jpg');
 
       fetch(registerForm.action || window.location.href, {
@@ -320,12 +376,15 @@ document.addEventListener('DOMContentLoaded', function () {
         }
       })
       .catch(err => {
-        console.error('Lỗi nộp form:', err);
+        console.error('Lỗi gửi form:', err);
         alert('Lỗi kết nối máy chủ, vui lòng thử lại!');
         submitBtn.disabled = false;
-        submitBtn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-2"></i>Đăng Ký Nhận Diện';
+        submitBtn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-1"></i> Đăng Ký Nhận Diện';
       });
     }, 'image/jpeg', 0.90);
   });
 });
 </script>
+
+</body>
+</html>
