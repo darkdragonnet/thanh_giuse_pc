@@ -171,5 +171,6 @@ module.exports = {
   getFilePath,
   readList,
   appendPerson,
-  writeBackRegistration
+  writeBackRegistration,
+  normalizeName
 };
