@@ -127,8 +127,9 @@ exports.viewRegisterByFile = async (req, res) => {
 // [CREATE] Xử lý Đăng ký Nhân sự mới
 exports.handleRegister = async (req, res, next) => {
   try {
-    const { name, aliasID, title, departmentID, base64_image, source_csv, departmentName, lop } = req.body;
-    const fileName = source_csv || req.body.file_name;
+    const { aliasID, title, departmentID, base64_image, source_csv, departmentName, lop, className, existing_person_id } = req.body;
+    const name = req.body.personName || req.body.name;
+    const fileName = req.params.file_name || source_csv || req.body.file_name || className || lop;
 
     // Validate Họ tên bắt buộc
     if (!name || !name.trim()) {
@@ -160,7 +161,8 @@ exports.handleRegister = async (req, res, next) => {
       imagePath: processedImage.processedPath,
       imageFilename: processedImage.filename,
       publicImageUrl,
-      source_csv: fileName || null
+      source_csv: fileName || null,
+      existing_person_id: existing_person_id || null
     });
 
     const deptMsg = departmentID ? ' và gán vào phòng ban đã chọn' : '';
@@ -171,7 +173,7 @@ exports.handleRegister = async (req, res, next) => {
     const code = err.response?.data?.returnCode;
     const msg = getErrorMessage(code, err.message);
     req.flash('error', `Lỗi đăng ký: ${msg}`);
-    const redirectUrl = req.body?.source_csv || req.body?.file_name;
+    const redirectUrl = req.params.file_name || req.body?.source_csv || req.body?.file_name;
     res.redirect(redirectUrl ? `/register/${redirectUrl}` : '/register');
   }
 };

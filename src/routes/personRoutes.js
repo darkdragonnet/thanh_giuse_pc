@@ -18,6 +18,7 @@ router.get('/checkin', personController.renderCheckin);
 // [CREATE]
 router.get('/register/:file_name', personController.viewRegisterByFile);
 router.get('/register', personController.renderRegisterForm);
+router.post('/register/:file_name', upload.any(), personController.handleRegister);
 router.post('/register', upload.any(), personController.handleRegister);
 
 // [UPDATE]

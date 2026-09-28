@@ -206,9 +206,89 @@ class HanetService {
     return this.postWithToken('/person/registerByUrl', payload);
   }
 
-  // Lấy danh sách nhân sự trực tiếp từ Cloud
-  async getListByPlace() {
-    return this.postWithToken('/person/getListByPlace', { placeID: this.placeId });
+  /**
+   * Lấy danh sách nhân sự từ Cloud HANET (Hỗ trợ phân trang tự động gom trọn vẹn 100% dữ liệu)
+   * @param {Object|boolean} options - Cấu hình { page, size, fetchAll } hoặc boolean fetchAll
+   * @returns {Promise<{ returnCode: number, returnMessage: string, data: Array, total: number }>}
+   */
+  async getListByPlace(options = { fetchAll: true, size: 50 }) {
+    const isFetchAll = typeof options === 'boolean' ? options : (options?.fetchAll !== false);
+    const requestedPage = typeof options === 'object' && options?.page ? Number(options.page) : 1;
+    const pageSize = typeof options === 'object' && options?.size ? Number(options.size) : 50;
+
+    // Nếu chỉ lấy 1 trang cụ thể (fetchAll = false)
+    if (!isFetchAll) {
+      return this.postWithToken('/person/getListByPlace', {
+        placeID: this.placeId,
+        page: requestedPage,
+        size: pageSize
+      });
+    }
+
+    // Tự động quét phân trang lấy toàn bộ nhân sự (fetchAll = true)
+    const personMap = new Map();
+    let currentPage = 1;
+    let keepPaging = true;
+    const maxPages = 50; // Giới hạn an toàn tối đa 50 trang
+
+    while (keepPaging && currentPage <= maxPages) {
+      try {
+        const res = await this.postWithToken('/person/getListByPlace', {
+          placeID: this.placeId,
+          page: currentPage,
+          size: pageSize
+        });
+
+        // Trích xuất mảng dữ liệu nhân sự linh hoạt
+        let items = [];
+        if (res && Array.isArray(res.data)) {
+          items = res.data;
+        } else if (res && res.data && Array.isArray(res.data.data)) {
+          items = res.data.data;
+        } else if (res && res.data && Array.isArray(res.data.hits)) {
+          items = res.data.hits;
+        } else if (Array.isArray(res)) {
+          items = res;
+        }
+
+        if (Array.isArray(items) && items.length > 0) {
+          items.forEach(p => {
+            const id = String(p.id || p.personID || '').trim();
+            if (id) {
+              personMap.set(id, p);
+            } else {
+              personMap.set(`temp_${Math.random()}`, p);
+            }
+          });
+
+          if (items.length < pageSize) {
+            keepPaging = false;
+          } else {
+            currentPage++;
+            // Khoảng nghỉ nhỏ 150ms để không vượt quá Rate Limit của HANET Cloud
+            await new Promise(resolve => setTimeout(resolve, 150));
+          }
+        } else {
+          keepPaging = false;
+        }
+      } catch (err) {
+        console.error(`[HanetService] Lỗi quét danh sách nhân sự tại trang ${currentPage}:`, err.message);
+        keepPaging = false;
+      }
+    }
+
+    const allPersons = Array.from(personMap.values());
+    return {
+      returnCode: 1,
+      returnMessage: 'Success',
+      data: allPersons,
+      total: allPersons.length
+    };
+  }
+
+  // Helper chuyên dụng lấy toàn bộ nhân sự
+  async getAllPersonsByPlace(size = 50) {
+    return this.getListByPlace({ fetchAll: true, size });
   }
 
   // Tra cứu chi tiết nhân sự qua mã Alias ID (MSNV)

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const Queue = require('bull');
 const hanetService = require('./hanetService');
 const imageService = require('./imageService');
@@ -22,7 +23,41 @@ const STATIC_DEPT_MAP = {
 };
 
 /**
- * Chuẩn hóa động Phòng Ban, Chức Vụ và Alias Prefix
+ * Sinh 4 ký tự ngẫu nhiên gồm chữ cái in hoa và số (A-Z, 0-9)
+ */
+function generateRandomSuffix(length = 4) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let result = '';
+  const bytes = crypto.randomBytes(length);
+  for (let i = 0; i < length; i++) {
+    result += chars[bytes[i] % chars.length];
+  }
+  return result;
+}
+
+/**
+ * Chuẩn hóa tên lớp cho AliasID:
+ * - Viết hoa toàn bộ không dấu
+ * - Ghép liền tên khối và phân lớp, loại bỏ hoàn toàn dấu gạch dưới (_) và khoảng trắng
+ * Ví dụ: 'ThemSuc_1a' -> 'THEMSUC1A', 'XungToi_2a' -> 'XUNGTOI2A', 'BaoDong_3' -> 'BAODONG3'
+ */
+function normalizeClassNameForAlias(className) {
+  if (!className) return '';
+  return className
+    .toString()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .replace(/[^a-zA-Z0-9]/g, '') // Loại bỏ triệt để _, space, ký tự lạ
+    .toUpperCase()
+    .trim();
+}
+
+/**
+ * Chuẩn hóa động Phòng Ban, Chức Vụ và Alias chuẩn HANET Cloud:
+ * Định dạng: [MÃ_PHÒNG_BAN]_[TÊN_LỚP]_[MÃ_ĐỊNH_DANH] (3 phần nối bằng 2 dấu gạch dưới)
+ * Ví dụ: TN_THEMSUC1A_4BDI, TN_GLV_FNWD, LM_DMHCCC_I2SG
  * @param {string} className Tên lớp / nhóm (VD: GLV, ThemSuc_1a, DMHCCC, GioiTre)
  * @param {string} inputTitle Chức vụ do người dùng nhập hoặc chọn
  * @param {string|number} inputDeptID ID phòng ban truyền vào (nếu có)
@@ -31,7 +66,7 @@ const STATIC_DEPT_MAP = {
  */
 async function resolveDepartmentAndAlias(className, inputTitle = '', inputDeptID = '', inputAlias = '') {
   const cleanClass = (className || '').replace(/\.csv$/i, '').trim();
-  const token = Date.now().toString(36).slice(-4).toUpperCase();
+  const normalizedClass = normalizeClassNameForAlias(cleanClass);
 
   // 1. Đọc dữ liệu từ file CSV mẫu trong data/ nếu có
   let csvDept = '';
@@ -59,9 +94,9 @@ async function resolveDepartmentAndAlias(className, inputTitle = '', inputDeptID
   // 2. Xác định Chức Vụ (Title)
   let resolvedTitle = (inputTitle || '').trim();
   if (!resolvedTitle) {
-    if (cleanClass.toUpperCase() === 'GLV') {
+    if (cleanClass.toUpperCase() === 'GLV' || normalizedClass === 'GLV') {
       resolvedTitle = 'Giáo Lý Viên';
-    } else if (cleanClass.toUpperCase() === 'DMHCCC') {
+    } else if (cleanClass.toUpperCase() === 'DMHCCC' || normalizedClass === 'DMHCCC') {
       resolvedTitle = 'Hội Viên';
     } else {
       resolvedTitle = csvTitle || 'Học Sinh';
@@ -73,13 +108,13 @@ async function resolveDepartmentAndAlias(className, inputTitle = '', inputDeptID
   let targetDeptID = String(inputDeptID || '').trim();
 
   // Quy chuẩn: Cả Giáo Lý Viên (GLV) và Học Sinh đều thuộc CHUNG phòng ban 'Thiếu Nhi' (ID: 990653)
-  if (cleanClass.toUpperCase() === 'GLV' || /^(themsuc|xungtoi|baodong|khaitam|vaodoi)/i.test(cleanClass)) {
+  if (normalizedClass === 'GLV' || /^(themsuc|xungtoi|baodong|khaitam|vaodoi)/i.test(normalizedClass)) {
     departmentName = 'Thiếu Nhi';
     targetDeptID = '990653';
-  } else if (cleanClass.toUpperCase() === 'DMHCCC' || /mariae/i.test(departmentName)) {
+  } else if (normalizedClass === 'DMHCCC' || /mariae/i.test(departmentName)) {
     departmentName = 'Legiô Mariae';
     targetDeptID = '990730';
-  } else if (/giới trẻ|gioi tre/i.test(departmentName) || cleanClass.toLowerCase().includes('gioitre')) {
+  } else if (/giới trẻ|gioi tre/i.test(departmentName) || normalizedClass.includes('GIOITRE')) {
     departmentName = 'Giới Trẻ';
     targetDeptID = '990731';
   } else if (STATIC_DEPT_MAP[departmentName.toLowerCase()]) {
@@ -108,34 +143,54 @@ async function resolveDepartmentAndAlias(className, inputTitle = '', inputDeptID
     targetDeptID = '990653'; // Mặc định Thiếu Nhi
   }
 
-  // 4. Sinh Tiền Tố Alias (aliasPrefix) & AliasID chuẩn
-  let aliasPrefix = '';
-  if (cleanClass.toUpperCase() === 'GLV') {
-    aliasPrefix = 'TN_GLV_';
+  // 4. Sinh Tiền Tố Alias & Mã AliasID chuẩn gồm đúng 3 phần: [MÃ_PHÒNG_BAN]_[TÊN_LỚP]_[MÃ_ĐỊNH_DANH]
+  let deptCode = 'TN';
+  let classCode = normalizedClass || 'CHUNG';
+
+  if (normalizedClass === 'GLV') {
+    deptCode = 'TN';
+    classCode = 'GLV';
   } else if (targetDeptID === '990653' || departmentName.toLowerCase().includes('thiếu nhi')) {
-    aliasPrefix = `TN_${cleanClass || 'Chung'}_`;
+    deptCode = 'TN';
+    classCode = normalizedClass || 'CHUNG';
   } else if (targetDeptID === '990730' || departmentName.toLowerCase().includes('mariae')) {
-    aliasPrefix = `LM_${cleanClass || 'DMHCCC'}_`;
+    deptCode = 'LM';
+    classCode = normalizedClass || 'DMHCCC';
   } else if (targetDeptID === '990731' || departmentName.toLowerCase().includes('trẻ')) {
-    aliasPrefix = `GT_${cleanClass || 'GioiTre'}_`;
+    deptCode = 'GT';
+    classCode = normalizedClass || 'GIOITRE';
   } else if (departmentName.toLowerCase().includes('gia trưởng')) {
-    aliasPrefix = `GTR_${cleanClass}_`;
+    deptCode = 'GTR';
+    classCode = normalizedClass || 'GIATRUONG';
   } else if (departmentName.toLowerCase().includes('hiền mẫu')) {
-    aliasPrefix = `HM_${cleanClass}_`;
+    deptCode = 'HM';
+    classCode = normalizedClass || 'HIENMAU';
   } else {
-    const acronym = departmentName
+    deptCode = departmentName
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/đ/g, 'd').replace(/Đ/g, 'D')
       .split(/\s+/)
       .map(w => w.charAt(0).toUpperCase())
-      .join('');
-    aliasPrefix = `${acronym}_${cleanClass || 'Member'}_`;
+      .join('') || 'PB';
+    classCode = normalizedClass || 'MEMBER';
   }
 
-  let finalAliasID = inputAlias ? inputAlias.trim().replace(/\s+/g, '_') : '';
-  if (!finalAliasID || !finalAliasID.startsWith(aliasPrefix.split('_')[0])) {
-    finalAliasID = `${aliasPrefix}${token}`;
+  const aliasPrefix = `${deptCode}_${classCode}_`;
+  const randomSuffix = generateRandomSuffix(4);
+
+  let finalAliasID = '';
+  if (inputAlias && inputAlias.trim()) {
+    let custom = inputAlias.trim().toUpperCase().replace(/\s+/g, '_');
+    // Nếu alias cũ chứa số tuần tự dạng _00xx hoặc chứa _ trong tên lớp, chuẩn hoá sang format mới
+    const parts = custom.split('_');
+    if (parts.length >= 3 && /^00[0-9A-Z]{2}$/i.test(parts[parts.length - 1])) {
+      parts[parts.length - 1] = randomSuffix;
+      custom = parts.join('_');
+    }
+    finalAliasID = custom;
+  } else {
+    finalAliasID = `${aliasPrefix}${randomSuffix}`;
   }
 
   return {
