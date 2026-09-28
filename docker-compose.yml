@@ -15,6 +15,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
+      - ./data:/app/data
       - ./uploads:/app/uploads
 
   redis:
