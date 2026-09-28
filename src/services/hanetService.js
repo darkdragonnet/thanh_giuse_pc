@@ -211,6 +211,14 @@ class HanetService {
     return this.postWithToken('/person/getListByPlace', { placeID: this.placeId });
   }
 
+  // Tra cứu chi tiết nhân sự qua mã Alias ID (MSNV)
+  async getPersonByAliasID(aliasID, placeID = this.placeId) {
+    return this.postWithToken('/person/getUserInfoByAliasID', {
+      placeID: placeID || this.placeId,
+      aliasID: String(aliasID || '').trim()
+    });
+  }
+
   // Lấy dữ liệu Check-in theo timestamp (Ràng buộc: cùng 1 tháng dương lịch)
   async getCheckinByTimestamp(fromTimestamp, toTimestamp) {
     return this.postWithToken('/person/getCheckinByPlaceIdInTimestamp', {
