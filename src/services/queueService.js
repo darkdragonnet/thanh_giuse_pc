@@ -5,6 +5,7 @@ const Queue = require('bull');
 const hanetService = require('./hanetService');
 const imageService = require('./imageService');
 const csvService = require('./csvService');
+const idempotencyService = require('./idempotencyService');
 const { getErrorMessage } = require('../utils/hanetErrorMap');
 
 // Danh sách mã lỗi không thể phục hồi bằng retry tự động (lỗi tham số, lỗi ảnh, lỗi quyền)
@@ -354,6 +355,27 @@ hanetQueue.process('register_person_job', 2, async (job) => {
   const finalTitle = resolved.title;
   const finalDeptID = resolved.targetDeptID;
 
+  // 2. Kiểm tra Idempotency Lock bằng Redis SETNX
+  const lockKey = idempotencyService.generateKey('FACE_REGISTER', finalAlias);
+  const currentStatus = await idempotencyService.getLockStatus(lockKey);
+
+  if (currentStatus === 'COMPLETED') {
+    console.log(`[IDEMPOTENCY] Bỏ qua tác vụ đã hoàn tất cho AliasID: ${finalAlias}`);
+    return {
+      status: 'SKIPPED_ALREADY_COMPLETED',
+      returnCode: 1,
+      returnMessage: 'Tác vụ đã được xử lý hoàn tất trước đó',
+      aliasID: finalAlias,
+      personID: existing_person_id || null
+    };
+  }
+
+  const acquired = await idempotencyService.acquireLock(lockKey, 120);
+  if (!acquired) {
+    console.warn(`[CONCURRENCY] Job cho ${finalAlias} đang được xử lý bởi worker khác.`);
+    throw new Error(`[CONCURRENCY] Job cho ${finalAlias} đang được xử lý bởi worker khác.`);
+  }
+
   console.log(`[Queue register_person_job] Bắt đầu xử lý: ${name} (${finalAlias}) | Chức vụ: ${finalTitle} | Phòng ban: ${resolved.departmentName} (${finalDeptID})`);
 
   let finalPersonID = existing_person_id || null;
@@ -361,7 +383,7 @@ hanetQueue.process('register_person_job', 2, async (job) => {
 
   try {
     try {
-      // 2. Thử gọi API đăng ký nhân sự (ưu tiên binary multipart nếu có imagePath, hoặc bằng URL)
+      // 3. Thử gọi API đăng ký nhân sự (ưu tiên binary multipart nếu có imagePath, hoặc bằng URL)
       let registerRes;
       if (imagePath && fs.existsSync(imagePath)) {
         registerRes = await hanetService.registerPerson({
@@ -403,11 +425,14 @@ hanetQueue.process('register_person_job', 2, async (job) => {
           await csvService.writeBackRegistration(targetClass, name, finalAvatarUrl, finalPersonID, finalTitle);
         }
 
-        return { returnCode: 1, returnMessage: 'Success', personID: finalPersonID };
+        // Đánh dấu hoàn tất trong Redis 24h
+        await idempotencyService.markCompleted(lockKey, 86400);
+
+        return { returnCode: 1, returnMessage: 'Success', personID: finalPersonID, aliasID: finalAlias };
       } else if (registerRes && registerRes.returnCode === -9007) {
         // Trường hợp HANET trả HTTP 200 kèm returnCode -9007 (Đã tồn tại khuôn mặt)
         const extractedId = extractPersonIDFromHanet(registerRes) || finalPersonID;
-        return await handleFaceExistsFallback({
+        const fallbackResult = await handleFaceExistsFallback({
           extractedPersonID: extractedId,
           name,
           finalTitle,
@@ -419,6 +444,11 @@ hanetQueue.process('register_person_job', 2, async (job) => {
           finalAvatarUrl,
           targetClass
         });
+
+        // Đánh dấu hoàn tất trong Redis 24h
+        await idempotencyService.markCompleted(lockKey, 86400);
+
+        return fallbackResult;
       } else {
         const errorMsg = getErrorMessage(registerRes?.returnCode, registerRes?.returnMessage);
         const code = Number(registerRes?.returnCode);
@@ -429,16 +459,18 @@ hanetQueue.process('register_person_job', 2, async (job) => {
           return { returnCode: code, returnMessage: errorMsg, error: true };
         }
 
+        // Lỗi tạm thời -> giải phóng lock để Bull Queue retry
+        await idempotencyService.releaseLock(lockKey);
         throw new Error(`[Mã lỗi ${registerRes?.returnCode}]: ${errorMsg}`);
       }
     } catch (apiErr) {
       const errData = apiErr.response?.data;
       const code = Number(errData?.returnCode || apiErr.code);
 
-      // 3. Xử lý lỗi -9007 qua Catch block
+      // 4. Xử lý lỗi -9007 qua Catch block
       if (code === -9007 || (errData && errData.returnCode === -9007)) {
         const extractedId = extractPersonIDFromHanet(apiErr) || finalPersonID;
-        return await handleFaceExistsFallback({
+        const fallbackResult = await handleFaceExistsFallback({
           extractedPersonID: extractedId,
           name,
           finalTitle,
@@ -450,6 +482,11 @@ hanetQueue.process('register_person_job', 2, async (job) => {
           finalAvatarUrl,
           targetClass
         });
+
+        // Đánh dấu hoàn tất trong Redis 24h
+        await idempotencyService.markCompleted(lockKey, 86400);
+
+        return fallbackResult;
       } else {
         const errorMsg = getErrorMessage(code, apiErr.message);
         console.error(`[Queue register_person_job] Lỗi khi xử lý: ${errorMsg}`);
@@ -459,11 +496,11 @@ hanetQueue.process('register_person_job', 2, async (job) => {
           return { returnCode: code, returnMessage: errorMsg, error: true };
         }
 
+        // Lỗi tạm thời -> giải phóng lock để Bull Queue retry
+        await idempotencyService.releaseLock(lockKey);
         throw apiErr;
       }
     }
-
-    return { returnCode: 1, returnMessage: 'Success', personID: finalPersonID };
 
   } finally {
     // [RULE-022] Luôn delay 30 giây mới dọn dẹp ảnh để HANET fetch xong
@@ -476,60 +513,85 @@ hanetQueue.process('register_person_job', 2, async (job) => {
 // Xử lý Job cập nhật nhân sự ngầm
 hanetQueue.process('update_person_job', 3, async (job) => {
   const { personID, name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename } = job.data;
+  const lockKey = idempotencyService.generateKey('PERSON_UPDATE', personID);
+
+  // 1. Kiểm tra Idempotency Lock
+  const currentStatus = await idempotencyService.getLockStatus(lockKey);
+  if (currentStatus === 'COMPLETED') {
+    console.log(`[IDEMPOTENCY] Bỏ qua tác vụ cập nhật đã hoàn tất cho PersonID: ${personID}`);
+    return { status: 'SKIPPED_ALREADY_COMPLETED', success: true, personID };
+  }
+
+  const acquired = await idempotencyService.acquireLock(lockKey, 120);
+  if (!acquired) {
+    console.warn(`[CONCURRENCY] Job cập nhật cho ${personID} đang được xử lý bởi worker khác.`);
+    throw new Error(`[CONCURRENCY] Job cập nhật cho ${personID} đang được xử lý bởi worker khác.`);
+  }
+
   console.log(`[Queue update_person_job] Bắt đầu xử lý: ${name} (${personID})`);
 
   try {
-    // 1. Cập nhật thông tin cơ bản
-    const infoResult = await hanetService.updateInfo({
-      personID,
-      name,
-      aliasID,
-      title,
-      departmentID
-    });
-
-    if (infoResult.returnCode !== 1) {
-      const errorMsg = getErrorMessage(infoResult.returnCode, infoResult.returnMessage);
-      const code = Number(infoResult.returnCode);
-      if (NON_RETRIABLE_CODES.has(code)) {
-        console.error(`[Queue update_person_job] ❌ Lỗi không thể retry (Mã ${code}): ${errorMsg}`);
-        return { returnCode: code, returnMessage: errorMsg, error: true };
-      }
-      throw new Error(`[Mã lỗi ${infoResult.returnCode}]: ${errorMsg}`);
-    }
-
-    // Gán phòng ban để khóa liên kết phòng ban 100% trên HANET Cloud
-    if (departmentID && String(departmentID) !== '0') {
-      try {
-        await hanetService.addPersonsToDepartment(departmentID, personID);
-        console.log(`[Queue update_person_job] ✅ Đã khóa liên kết phòng ban ${departmentID} cho PersonID: ${personID}`);
-      } catch (deptErr) {
-        console.warn(`[Queue update_person_job] Gán phòng ban thất bại:`, deptErr.message);
-      }
-    }
-
-    // 2. Nếu có ảnh mới, cập nhật Face ID
-    const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
-    const faceUrl = publicImageUrl || (imageFilename ? `${fallbackBaseUrl}/uploads/${imageFilename}` : null);
-
-    if (faceUrl) {
-      const faceResult = await hanetService.updateByFaceUrl({
+    try {
+      // 2. Cập nhật thông tin cơ bản
+      const infoResult = await hanetService.updateInfo({
         personID,
-        faceUrl
+        name,
+        aliasID,
+        title,
+        departmentID
       });
 
-      if (faceResult.returnCode !== 1) {
-        const errorMsg = getErrorMessage(faceResult.returnCode, faceResult.returnMessage);
-        const code = Number(faceResult.returnCode);
+      if (infoResult.returnCode !== 1) {
+        const errorMsg = getErrorMessage(infoResult.returnCode, infoResult.returnMessage);
+        const code = Number(infoResult.returnCode);
         if (NON_RETRIABLE_CODES.has(code)) {
-          console.error(`[Queue update_person_job] ❌ Lỗi không thể retry khi cập nhật ảnh (Mã ${code}): ${errorMsg}`);
+          console.error(`[Queue update_person_job] ❌ Lỗi không thể retry (Mã ${code}): ${errorMsg}`);
           return { returnCode: code, returnMessage: errorMsg, error: true };
         }
-        throw new Error(`[Mã lỗi ${faceResult.returnCode}]: ${errorMsg}`);
+        await idempotencyService.releaseLock(lockKey);
+        throw new Error(`[Mã lỗi ${infoResult.returnCode}]: ${errorMsg}`);
       }
-    }
 
-    return { success: true, personID };
+      // Gán phòng ban để khóa liên kết phòng ban 100% trên HANET Cloud
+      if (departmentID && String(departmentID) !== '0') {
+        try {
+          await hanetService.addPersonsToDepartment(departmentID, personID);
+          console.log(`[Queue update_person_job] ✅ Đã khóa liên kết phòng ban ${departmentID} cho PersonID: ${personID}`);
+        } catch (deptErr) {
+          console.warn(`[Queue update_person_job] Gán phòng ban thất bại:`, deptErr.message);
+        }
+      }
+
+      // 3. Nếu có ảnh mới, cập nhật Face ID
+      const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
+      const faceUrl = publicImageUrl || (imageFilename ? `${fallbackBaseUrl}/uploads/${imageFilename}` : null);
+
+      if (faceUrl) {
+        const faceResult = await hanetService.updateByFaceUrl({
+          personID,
+          faceUrl
+        });
+
+        if (faceResult.returnCode !== 1) {
+          const errorMsg = getErrorMessage(faceResult.returnCode, faceResult.returnMessage);
+          const code = Number(faceResult.returnCode);
+          if (NON_RETRIABLE_CODES.has(code)) {
+            console.error(`[Queue update_person_job] ❌ Lỗi không thể retry khi cập nhật ảnh (Mã ${code}): ${errorMsg}`);
+            return { returnCode: code, returnMessage: errorMsg, error: true };
+          }
+          await idempotencyService.releaseLock(lockKey);
+          throw new Error(`[Mã lỗi ${faceResult.returnCode}]: ${errorMsg}`);
+        }
+      }
+
+      // Đánh dấu hoàn tất trong Redis 24h
+      await idempotencyService.markCompleted(lockKey, 86400);
+
+      return { success: true, personID };
+    } catch (err) {
+      await idempotencyService.releaseLock(lockKey);
+      throw err;
+    }
   } finally {
     // [RULE-022] Xử lý thành công hoặc kết thúc -> Luôn delay 30 giây trước khi xóa file tạm
     if (imagePath) {
