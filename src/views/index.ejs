@@ -31,13 +31,13 @@
     <div class="card-body bg-light-subtle border-top border-bottom py-3 px-4">
       <div class="row g-2">
         <!-- Lọc Mã NV -->
-        <div class="col-12 col-sm-6 col-lg-3">
+        <div class="col-12 col-sm-6 col-lg-2">
           <label class="form-label small fw-semibold text-secondary mb-1">
             Mã NV (Alias) <span class="text-muted fw-normal" title="* đại diện nhóm ký tự, ? đại diện 1 ký tự">(*, ?)</span>
           </label>
           <div class="input-group input-group-sm">
             <span class="input-group-text bg-white border-end-0 text-muted"><i class="bi bi-upc-scan"></i></span>
-            <input type="text" id="filterAlias" class="form-control bg-white border-start-0 filter-input" placeholder="VD: *GLV*, LG*, TN_?01">
+            <input type="text" id="filterAlias" class="form-control bg-white border-start-0 filter-input" placeholder="VD: *GLV*, TN_*">
           </div>
         </div>
 
@@ -52,8 +52,19 @@
           </div>
         </div>
 
+        <!-- Lọc Phòng Ban -->
+        <div class="col-12 col-sm-6 col-lg-2">
+          <label class="form-label small fw-semibold text-secondary mb-1">
+            Phòng Ban <span class="text-muted fw-normal">(*, ?)</span>
+          </label>
+          <div class="input-group input-group-sm">
+            <span class="input-group-text bg-white border-end-0 text-muted"><i class="bi bi-diagram-3"></i></span>
+            <input type="text" id="filterDept" class="form-control bg-white border-start-0 filter-input" placeholder="VD: *Thiếu*, *Lêgiô*">
+          </div>
+        </div>
+
         <!-- Lọc Chức Vụ -->
-        <div class="col-12 col-sm-6 col-lg-3">
+        <div class="col-12 col-sm-6 col-lg-2">
           <label class="form-label small fw-semibold text-secondary mb-1">
             Chức Vụ <span class="text-muted fw-normal">(*, ?)</span>
           </label>
@@ -76,7 +87,7 @@
       </div>
     </div>
 
-    <!-- Bảng Danh Sách 6 Cột Hiện Tại -->
+    <!-- Bảng Danh Sách 7 Cột -->
     <div class="table-responsive">
       <table class="table table-hover align-middle mb-0" id="personTable">
         <thead class="table-light border-bottom">
@@ -94,26 +105,41 @@
                 <i class="bi bi-arrow-down-up text-muted opacity-50 ms-1 sort-icon"></i>
               </div>
             </th>
-            <th class="cursor-pointer sortable text-secondary small py-3" data-col="title" style="width: 180px;">
+            <th class="cursor-pointer sortable text-secondary small py-3" data-col="department" style="width: 150px;">
+              <div class="d-flex align-items-center justify-content-between">
+                <span>Phòng Ban</span>
+                <i class="bi bi-arrow-down-up text-muted opacity-50 ms-1 sort-icon"></i>
+              </div>
+            </th>
+            <th class="cursor-pointer sortable text-secondary small py-3" data-col="title" style="width: 150px;">
               <div class="d-flex align-items-center justify-content-between">
                 <span>Chức Vụ</span>
                 <i class="bi bi-arrow-down-up text-muted opacity-50 ms-1 sort-icon"></i>
               </div>
             </th>
-            <th class="cursor-pointer sortable text-secondary small py-3" data-col="personID" style="width: 220px;">
+            <th class="cursor-pointer sortable text-secondary small py-3" data-col="personID" style="width: 200px;">
               <div class="d-flex align-items-center justify-content-between">
                 <span>Cloud Person ID</span>
                 <i class="bi bi-arrow-down-up text-muted opacity-50 ms-1 sort-icon"></i>
               </div>
             </th>
-            <th class="text-center text-secondary small py-3" style="width: 110px;">Thao Tác</th>
+            <th class="text-center text-secondary small py-3" style="width: 170px;">Thao Tác</th>
           </tr>
         </thead>
         <tbody id="personTableBody">
-          <% (persons || []).forEach(p => { %>
+          <% (persons || []).forEach(p => { 
+               const pDeptId = String(p.departmentID || p.department_id || '');
+               let pDeptName = (typeof deptMap !== 'undefined' && deptMap[pDeptId]) ? deptMap[pDeptId] : (p.department || p.department_name || '');
+               if (!pDeptName && (p.aliasID || '').startsWith('TN_')) pDeptName = 'Thiếu Nhi';
+               if (!pDeptName && (p.aliasID || '').startsWith('LM_')) pDeptName = 'Legiô Mariae';
+               if (!pDeptName && ((p.aliasID || '').startsWith('GT_') || (p.aliasID || '').startsWith('TG_'))) pDeptName = 'Giới Trẻ';
+               if (!pDeptName && ((p.aliasID || '').startsWith('TG1_') || (p.aliasID || '').startsWith('GTR_'))) pDeptName = 'Gia Trưởng';
+               if (!pDeptName && (p.aliasID || '').startsWith('HM_')) pDeptName = 'Hiền Mẫu';
+          %>
             <tr class="person-row border-bottom border-light-subtle"
                 data-alias="<%= (p.aliasID || '').toLowerCase() %>"
                 data-name="<%= (p.name || '').toLowerCase() %>"
+                data-department="<%= (pDeptName || '').toLowerCase() %>"
                 data-title="<%= (p.title || '').toLowerCase() %>"
                 data-personid="<%= (p.personID || p.id || '').toLowerCase() %>">
               
@@ -138,28 +164,47 @@
               <!-- Cột 3: Họ và Tên -->
               <td class="py-2 fw-medium text-dark"><%= p.name %></td>
 
-              <!-- Cột 4: Chức Vụ -->
+              <!-- Cột 4: Phòng Ban -->
+              <td class="py-2">
+                <% if (pDeptName) { %>
+                  <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-2 py-1 fs-7">
+                    <i class="bi bi-diagram-3 me-1"></i><%= pDeptName %>
+                  </span>
+                <% } else { %>
+                  <span class="text-muted small">---</span>
+                <% } %>
+              </td>
+
+              <!-- Cột 5: Chức Vụ -->
               <td class="py-2">
                 <span class="text-secondary small fw-normal"><%= p.title || '—' %></span>
               </td>
 
-              <!-- Cột 5: Cloud Person ID -->
+              <!-- Cột 6: Cloud Person ID -->
               <td class="py-2">
                 <code class="text-primary-emphasis bg-primary-subtle px-2 py-1 rounded small font-monospace"><%= p.personID || p.id %></code>
               </td>
 
-              <!-- Cột 6: Thao Tác -->
-              <td class="text-center py-2">
-                <a href="/edit/<%= p.personID || p.id %>" class="btn btn-sm btn-outline-primary rounded-pill px-3 py-1 shadow-xs" title="Chỉnh sửa khuôn mặt / thông tin">
-                  <i class="bi bi-pencil-square me-1"></i>Sửa
-                </a>
+              <!-- Cột 7: Thao Tác -->
+              <td class="text-center py-2 text-nowrap">
+                <div class="d-inline-flex gap-1 align-items-center">
+                  <a href="/edit/<%= p.personID || p.id %>" class="btn btn-sm btn-outline-primary rounded-pill px-2 py-1 shadow-xs" title="Chỉnh sửa khuôn mặt / thông tin">
+                    <i class="bi bi-pencil-square me-1"></i>Sửa
+                  </a>
+                  <form action="/delete/<%= p.personID || p.id %>?_method=DELETE" method="POST" class="d-inline m-0" onsubmit="return confirm('⚠️ XÁC NHẬN XÓA:\n\nBạn có chắc chắn muốn xóa nhân sự &quot;<%= (p.name || '').replace(/\"/g, '&quot;') %>&quot; (ID: <%= p.personID || p.id %>) khỏi Cloud HANET và hệ thống không?\n\nThao tác này không thể hoàn tác!');">
+                    <input type="hidden" name="personName" value="<%= p.name || '' %>">
+                    <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill px-2 py-1 shadow-xs" title="Xóa vĩnh viễn nhân sự khỏi Cloud và CSV">
+                      <i class="bi bi-trash3 me-1"></i>Xóa
+                    </button>
+                  </form>
+                </div>
               </td>
             </tr>
           <% }) %>
 
           <!-- Dòng thông báo khi không có kết quả -->
           <tr id="noResultRow" style="display: none;">
-            <td colspan="6" class="text-center py-5 text-muted">
+            <td colspan="7" class="text-center py-5 text-muted">
               <div class="py-4">
                 <i class="bi bi-funnel text-secondary opacity-25 display-4 mb-3 d-block"></i>
                 <h6 class="fw-semibold text-secondary">Không tìm thấy nhân sự phù hợp</h6>
@@ -179,6 +224,7 @@
   document.addEventListener('DOMContentLoaded', () => {
     const filterAlias = document.getElementById('filterAlias');
     const filterName = document.getElementById('filterName');
+    const filterDept = document.getElementById('filterDept');
     const filterTitle = document.getElementById('filterTitle');
     const filterPersonID = document.getElementById('filterPersonID');
     const btnResetFilter = document.getElementById('btnResetFilter');
@@ -211,10 +257,11 @@
       }
     }
 
-    // Hàm áp dụng bộ lọc đồng thời trên cả 4 cột
+    // Hàm áp dụng bộ lọc đồng thời trên cả 5 cột
     function executeFilter() {
       const regexAlias = parseWildcardToRegExp(filterAlias.value);
       const regexName = parseWildcardToRegExp(filterName.value);
+      const regexDept = parseWildcardToRegExp(filterDept.value);
       const regexTitle = parseWildcardToRegExp(filterTitle.value);
       const regexPersonID = parseWildcardToRegExp(filterPersonID.value);
 
@@ -223,6 +270,7 @@
       rows.forEach(row => {
         const alias = row.dataset.alias;
         const name = row.dataset.name;
+        const dept = row.dataset.department;
         const title = row.dataset.title;
         const pid = row.dataset.personid;
 
@@ -230,6 +278,7 @@
 
         if (regexAlias && !regexAlias.test(alias)) isMatch = false;
         if (regexName && !regexName.test(name)) isMatch = false;
+        if (regexDept && !regexDept.test(dept)) isMatch = false;
         if (regexTitle && !regexTitle.test(title)) isMatch = false;
         if (regexPersonID && !regexPersonID.test(pid)) isMatch = false;
 
@@ -245,8 +294,8 @@
       noResultRow.style.display = matchedCount === 0 ? '' : 'none';
     }
 
-    // Lắng nghe sự kiện gõ phím trên 4 ô lọc
-    [filterAlias, filterName, filterTitle, filterPersonID].forEach(input => {
+    // Lắng nghe sự kiện gõ phím trên cả 5 ô lọc
+    [filterAlias, filterName, filterDept, filterTitle, filterPersonID].forEach(input => {
       input.addEventListener('input', executeFilter);
     });
 
@@ -254,6 +303,7 @@
     btnResetFilter.addEventListener('click', () => {
       filterAlias.value = '';
       filterName.value = '';
+      filterDept.value = '';
       filterTitle.value = '';
       filterPersonID.value = '';
       executeFilter();

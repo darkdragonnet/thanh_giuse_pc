@@ -157,17 +157,35 @@ class HanetService {
 
   // Cập nhật thông tin nhân sự (Name, AliasID, Title, DepartmentID)
   async updateInfo(data) {
+    const cleanPersonID = String(data.personID || data.id || '').trim();
+    const cleanName = String(data.name || '').trim();
+    const cleanAliasID = String(data.aliasID || '').trim().replace(/\s+/g, '_');
+    const cleanTitle = String(data.title || 'Nhân viên').trim();
+    const cleanDeptID = String(data.departmentID || '').trim();
+    const departmentID = (!cleanDeptID || cleanDeptID === '0' || cleanDeptID === 'undefined' || cleanDeptID === 'null')
+      ? '990653'
+      : cleanDeptID;
+
     const payload = {
-      placeID: this.placeId,
-      personID: data.personID || data.id,
-      aliasID: data.aliasID,
-      name: data.name,
-      title: data.title || 'Nhân viên'
+      placeID: String(data.placeID || this.placeId).trim(),
+      name: cleanName,
+      title: cleanTitle,
+      departmentID: departmentID
     };
-    if (data.departmentID && String(data.departmentID) !== '0') {
-      payload.departmentID = String(data.departmentID);
+
+    if (cleanPersonID) {
+      payload.personID = cleanPersonID;
     }
+    if (cleanAliasID) {
+      payload.aliasID = cleanAliasID;
+    }
+
     return this.postWithToken('/person/updateInfo', payload);
+  }
+
+  // Alias hỗ trợ tương thích với /person/update hoặc updatePerson
+  async updatePerson(data) {
+    return this.updateInfo(data);
   }
 
   // Helper cập nhật thông tin nhân sự theo tham số rời
@@ -177,11 +195,23 @@ class HanetService {
 
   // Cập nhật Face ID cho nhân sự qua faceUrl
   async updateByFaceUrl(data) {
+    const cleanPersonID = String(data.personID || data.id || '').trim();
+    const cleanFaceUrl = String(data.publicImageUrl || data.faceUrl || data.fileUrl || data.avatar || '').trim();
+    const cleanAliasID = String(data.aliasID || '').trim().replace(/\s+/g, '_');
+
     const payload = {
-      placeID: this.placeId,
-      personID: data.personID || data.id,
-      faceUrl: data.publicImageUrl || data.faceUrl
+      placeID: String(data.placeID || this.placeId).trim(),
+      faceUrl: cleanFaceUrl,
+      fileUrl: cleanFaceUrl
     };
+
+    if (cleanPersonID) {
+      payload.personID = cleanPersonID;
+    }
+    if (cleanAliasID) {
+      payload.aliasID = cleanAliasID;
+    }
+
     return this.postWithToken('/person/updateByFaceUrl', payload);
   }
 

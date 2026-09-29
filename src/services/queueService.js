@@ -219,6 +219,128 @@ const hanetQueue = new Queue('hanet-sync', {
   }
 });
 
+/**
+ * Trích xuất personID linh hoạt từ phản hồi lỗi hoặc dữ liệu của HANET Cloud
+ */
+function extractPersonIDFromHanet(resOrErr) {
+  if (!resOrErr) return null;
+  if (typeof resOrErr === 'string' && /^[0-9]+$/.test(resOrErr.trim())) return resOrErr.trim();
+  if (resOrErr.personID) return String(resOrErr.personID).trim();
+  if (resOrErr.id) return String(resOrErr.id).trim();
+
+  // Kiểm tra thuộc tính data
+  if (resOrErr.data) {
+    if (typeof resOrErr.data === 'string' && /^[0-9]+$/.test(resOrErr.data.trim())) return resOrErr.data.trim();
+    if (resOrErr.data.personID) return String(resOrErr.data.personID).trim();
+    if (resOrErr.data.id) return String(resOrErr.data.id).trim();
+  }
+
+  // Kiểm tra response từ axios error
+  if (resOrErr.response?.data) {
+    const d = resOrErr.response.data;
+    if (typeof d === 'string' && /^[0-9]+$/.test(d.trim())) return d.trim();
+    if (d.personID) return String(d.personID).trim();
+    if (d.id) return String(d.id).trim();
+    if (d.data) {
+      if (typeof d.data === 'string' && /^[0-9]+$/.test(d.data.trim())) return d.data.trim();
+      if (d.data.personID) return String(d.data.personID).trim();
+      if (d.data.id) return String(d.data.id).trim();
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Xử lý luồng Fallback khi gặp lỗi -9007 (Khuôn mặt đã tồn tại)
+ */
+async function handleFaceExistsFallback({
+  extractedPersonID,
+  name,
+  finalTitle,
+  finalAlias,
+  finalDeptID,
+  resolvedDepartmentName,
+  faceUrl,
+  publicImageUrl,
+  finalAvatarUrl,
+  targetClass
+}) {
+  let personId = extractedPersonID;
+
+  // Nếu chưa có personID, thử tra cứu lại qua AliasID trên HANET Cloud
+  if (!personId && finalAlias) {
+    try {
+      const aliasRes = await hanetService.getPersonByAliasID(finalAlias);
+      personId = extractPersonIDFromHanet(aliasRes);
+    } catch (e) {
+      console.warn(`[QueueService] Tra cứu personID qua AliasID ${finalAlias} không thành công:`, e.message);
+    }
+  }
+
+  console.log('[QueueService] Phát hiện mã -9007, chuyển hướng cập nhật thông tin cho personID:', personId || 'Không xác định');
+
+  const targetFaceUrl = faceUrl || publicImageUrl;
+
+  // 1. Cập nhật ảnh khuôn mặt mới (Face ID)
+  if (targetFaceUrl && personId) {
+    try {
+      await hanetService.updateByFaceUrl({
+        personID: personId,
+        faceUrl: targetFaceUrl,
+        aliasID: finalAlias
+      });
+      console.log(`[QueueService] ✅ Đã cập nhật ảnh Face ID mới cho personID: ${personId}`);
+    } catch (faceErr) {
+      const errCode = faceErr.response?.data?.returnCode;
+      console.warn(`[QueueService] Cập nhật Face ID thất bại:`, getErrorMessage(errCode, faceErr.message));
+    }
+  }
+
+  // 2. Cập nhật thông tin cá nhân với payload chuẩn hóa
+  if (personId) {
+    try {
+      await hanetService.updateInfo({
+        personID: personId,
+        name,
+        title: finalTitle,
+        aliasID: finalAlias,
+        departmentID: finalDeptID
+      });
+      console.log(`[QueueService] ✅ Đã cập nhật thông tin cho personID: ${personId}`);
+    } catch (infoErr) {
+      const errCode = infoErr.response?.data?.returnCode;
+      console.warn(`[QueueService] Cập nhật info thất bại:`, getErrorMessage(errCode, infoErr.message));
+    }
+  }
+
+  // 3. Khóa phòng ban chuẩn
+  if (finalDeptID && personId) {
+    try {
+      await hanetService.addPersonsToDepartment(finalDeptID, personId);
+      console.log(`[QueueService] ✅ Đã khóa phòng ban ${finalDeptID} (${resolvedDepartmentName}) cho personID: ${personId}`);
+    } catch (deptErr) {
+      console.warn(`[QueueService] Gán phòng ban thất bại:`, deptErr.message);
+    }
+  }
+
+  // 4. Ghi ngược thông tin đăng ký vào file CSV
+  if (targetClass && personId) {
+    try {
+      await csvService.writeBackRegistration(targetClass, name, targetFaceUrl || finalAvatarUrl, personId, finalTitle);
+    } catch (csvErr) {
+      console.warn(`[QueueService] Ghi ngược CSV thất bại:`, csvErr.message);
+    }
+  }
+
+  return {
+    returnCode: 1,
+    returnMessage: 'Cập nhật Face ID thành công (Khuôn mặt đã tồn tại trên hệ thống)',
+    personID: personId,
+    updated: true
+  };
+}
+
 // Xử lý Job đăng ký nhân sự ngầm
 hanetQueue.process('register_person_job', 2, async (job) => {
   const { name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename, source_csv, className, class_name, existing_person_id } = job.data;
@@ -280,46 +402,23 @@ hanetQueue.process('register_person_job', 2, async (job) => {
         if (targetClass && finalPersonID) {
           await csvService.writeBackRegistration(targetClass, name, finalAvatarUrl, finalPersonID, finalTitle);
         }
-      } else if (registerRes && registerRes.returnCode === -9007 && (registerRes.data?.personID || registerRes.data?.id)) {
+
+        return { returnCode: 1, returnMessage: 'Success', personID: finalPersonID };
+      } else if (registerRes && registerRes.returnCode === -9007) {
         // Trường hợp HANET trả HTTP 200 kèm returnCode -9007 (Đã tồn tại khuôn mặt)
-        finalPersonID = registerRes.data?.personID || registerRes.data?.id;
-        console.warn(`[Queue register_person_job] ${getErrorMessage(-9007)} (PersonID: ${finalPersonID}). Tiến hành cập nhật ảnh Face ID & thông tin...`);
-
-        // a. Cập nhật khuôn mặt mới (Face ID)
-        const targetFaceUrl = faceUrl || publicImageUrl;
-        if (targetFaceUrl) {
-          try {
-            await hanetService.updatePersonByFaceUrl(finalPersonID, targetFaceUrl);
-            console.log(`[Queue register_person_job] ✅ Đã cập nhật ảnh Face ID mới cho ${finalPersonID}`);
-          } catch (faceErr) {
-            const errCode = faceErr.response?.data?.returnCode;
-            console.warn(`[Queue register_person_job] Cập nhật Face ID thất bại:`, getErrorMessage(errCode, faceErr.message));
-          }
-        }
-
-        // b. Cập nhật thông tin cá nhân
-        try {
-          await hanetService.updatePersonInfo(finalPersonID, name, finalTitle, finalAlias, finalDeptID);
-          console.log(`[Queue register_person_job] ✅ Đã cập nhật thông tin cho ${finalPersonID}`);
-        } catch (infoErr) {
-          const errCode = infoErr.response?.data?.returnCode;
-          console.warn(`[Queue register_person_job] Cập nhật info thất bại:`, getErrorMessage(errCode, infoErr.message));
-        }
-
-        // c. Gán phòng ban chuẩn
-        if (finalDeptID && finalPersonID) {
-          try {
-            await hanetService.addPersonsToDepartment(finalDeptID, finalPersonID);
-            console.log(`[Queue register_person_job] ✅ Đã khóa phòng ban ${finalDeptID} cho ${finalPersonID}`);
-          } catch (deptErr) {
-            console.warn(`[Queue register_person_job] Gán phòng ban thất bại:`, deptErr.message);
-          }
-        }
-
-        // d. Tự động ghi ngược thông tin đăng ký vào file CSV
-        if (targetClass && finalPersonID) {
-          await csvService.writeBackRegistration(targetClass, name, targetFaceUrl || finalAvatarUrl, finalPersonID, finalTitle);
-        }
+        const extractedId = extractPersonIDFromHanet(registerRes) || finalPersonID;
+        return await handleFaceExistsFallback({
+          extractedPersonID: extractedId,
+          name,
+          finalTitle,
+          finalAlias,
+          finalDeptID,
+          resolvedDepartmentName: resolved.departmentName,
+          faceUrl,
+          publicImageUrl,
+          finalAvatarUrl,
+          targetClass
+        });
       } else {
         const errorMsg = getErrorMessage(registerRes?.returnCode, registerRes?.returnMessage);
         const code = Number(registerRes?.returnCode);
@@ -337,45 +436,20 @@ hanetQueue.process('register_person_job', 2, async (job) => {
       const code = Number(errData?.returnCode || apiErr.code);
 
       // 3. Xử lý lỗi -9007 qua Catch block
-      if (errData && errData.returnCode === -9007 && (errData.data?.personID || errData.data?.id)) {
-        finalPersonID = errData.data.personID || errData.data.id;
-        console.warn(`[Queue register_person_job] ${getErrorMessage(-9007)} (PersonID: ${finalPersonID}). Tiến hành cập nhật ảnh Face ID & thông tin...`);
-
-        // a. Cập nhật khuôn mặt mới (Face ID)
-        const targetFaceUrl = faceUrl || publicImageUrl;
-        if (targetFaceUrl) {
-          try {
-            await hanetService.updatePersonByFaceUrl(finalPersonID, targetFaceUrl);
-            console.log(`[Queue register_person_job] ✅ Đã cập nhật ảnh Face ID mới cho ${finalPersonID}`);
-          } catch (faceErr) {
-            const errCode = faceErr.response?.data?.returnCode;
-            console.warn(`[Queue register_person_job] Cập nhật Face ID thất bại:`, getErrorMessage(errCode, faceErr.message));
-          }
-        }
-
-        // b. Cập nhật thông tin cá nhân
-        try {
-          await hanetService.updatePersonInfo(finalPersonID, name, finalTitle, finalAlias, finalDeptID);
-          console.log(`[Queue register_person_job] ✅ Đã cập nhật thông tin cho ${finalPersonID}`);
-        } catch (infoErr) {
-          const errCode = infoErr.response?.data?.returnCode;
-          console.warn(`[Queue register_person_job] Cập nhật info thất bại:`, getErrorMessage(errCode, infoErr.message));
-        }
-
-        // c. Gán phòng ban chuẩn
-        if (finalDeptID && finalPersonID) {
-          try {
-            await hanetService.addPersonsToDepartment(finalDeptID, finalPersonID);
-            console.log(`[Queue register_person_job] ✅ Đã khóa phòng ban ${finalDeptID} cho ${finalPersonID}`);
-          } catch (deptErr) {
-            console.warn(`[Queue register_person_job] Gán phòng ban thất bại:`, deptErr.message);
-          }
-        }
-
-        // d. Tự động ghi ngược thông tin đăng ký vào file CSV
-        if (targetClass && finalPersonID) {
-          await csvService.writeBackRegistration(targetClass, name, targetFaceUrl || finalAvatarUrl, finalPersonID, finalTitle);
-        }
+      if (code === -9007 || (errData && errData.returnCode === -9007)) {
+        const extractedId = extractPersonIDFromHanet(apiErr) || finalPersonID;
+        return await handleFaceExistsFallback({
+          extractedPersonID: extractedId,
+          name,
+          finalTitle,
+          finalAlias,
+          finalDeptID,
+          resolvedDepartmentName: resolved.departmentName,
+          faceUrl,
+          publicImageUrl,
+          finalAvatarUrl,
+          targetClass
+        });
       } else {
         const errorMsg = getErrorMessage(code, apiErr.message);
         console.error(`[Queue register_person_job] Lỗi khi xử lý: ${errorMsg}`);

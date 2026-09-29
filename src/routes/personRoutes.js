@@ -27,5 +27,8 @@ router.put('/update/:personID', upload.any(), personController.handleUpdate);
 
 // [DELETE]
 router.delete('/delete/:personID', personController.handleDelete);
+router.post('/delete/:personID', personController.handleDelete);
+router.delete('/person/delete/:personID', personController.handleDelete);
+router.post('/person/delete/:personID', personController.handleDelete);
 
 module.exports = router;

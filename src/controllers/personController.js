@@ -9,18 +9,36 @@ const { getErrorMessage } = require('../utils/hanetErrorMap');
 // [READ] Danh sách Nhân sự từ Cloud
 exports.listPersons = async (req, res, next) => {
   try {
-    const result = await hanetService.getListByPlace();
-    const persons = result?.data || [];
+    const [personRes, deptRes] = await Promise.all([
+      hanetService.getListByPlace(),
+      hanetService.getDepartmentList(1, 100).catch(() => ({ data: [] }))
+    ]);
+    const persons = personRes?.data || [];
+    const depts = deptRes?.data?.hits || (Array.isArray(deptRes?.data) ? deptRes.data : []);
+    const deptMap = {
+      '990653': 'Thiếu Nhi',
+      '990730': 'Legiô Mariae',
+      '990731': 'Giới Trẻ',
+      '990735': 'Gia Trưởng',
+      '990736': 'Hiền Mẫu'
+    };
+    depts.forEach(d => {
+      const id = d.id || d.department_id;
+      const name = d.name || d.department_name;
+      if (id && name) deptMap[String(id)] = name;
+    });
+
     res.render('person/list', {
       title: 'Danh sách Nhân sự trên HANET Cloud',
-      persons
+      persons,
+      deptMap
     });
   } catch (err) {
     console.error('[List Error]', err.message);
     const code = err.response?.data?.returnCode;
     const msg = getErrorMessage(code, err.message);
     req.flash('error', `Không thể lấy dữ liệu từ HANET Cloud: ${msg}`);
-    res.render('person/list', { title: 'Danh sách Nhân sự', persons: [] });
+    res.render('person/list', { title: 'Danh sách Nhân sự', persons: [], deptMap: {} });
   }
 };
 
@@ -298,17 +316,30 @@ exports.handleUpdate = async (req, res, next) => {
   }
 };
 
-// [DELETE] Xử lý Xóa Nhân sự trên HANET Cloud
+// [DELETE] Xử lý Xóa Nhân sự trên HANET Cloud & Đồng bộ CSV
 exports.handleDelete = async (req, res, next) => {
+  const personID = req.params.personID || req.params.id || req.body.personID;
+  const personName = req.body.personName || req.body.name || '';
+
+  if (!personID) {
+    req.flash('error', 'Không tìm thấy ID nhân sự để xóa.');
+    return res.redirect('/');
+  }
+
   try {
-    const { personID } = req.params;
-    // Gọi trực tiếp API xóa nhân sự trên HANET Cloud
+    // 1. Gọi API xóa nhân sự trên HANET Cloud
     const result = await hanetService.removePerson(personID);
 
-    if (result.returnCode === 1) {
-      req.flash('success', `Đã xóa thành công nhân sự ID "${personID}" khỏi HANET Cloud.`);
+    if (result && result.returnCode === 1) {
+      // 2. Tự động reset Face ID & PersonID trong các file CSV (Đồng bộ 2 chiều)
+      const updatedCsvFiles = csvService.removePersonFromCsv(personID, personName);
+      const csvNote = updatedCsvFiles.length > 0 
+        ? ` và đã đồng bộ xóa trong file danh mục (${updatedCsvFiles.join(', ')})` 
+        : '';
+
+      req.flash('success', `Đã xóa thành công nhân sự [ID: ${personID}] khỏi HANET Cloud${csvNote}.`);
     } else {
-      const errorMsg = getErrorMessage(result.returnCode, result.returnMessage);
+      const errorMsg = getErrorMessage(result?.returnCode, result?.returnMessage);
       req.flash('error', `Lỗi từ HANET Cloud: ${errorMsg}`);
     }
 

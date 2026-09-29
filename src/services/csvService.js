@@ -167,10 +167,65 @@ async function writeBackRegistration(className, personName, avatarUrl, personId,
   }
 }
 
+/**
+ * Xóa/Reset Face ID (avatar và PersonID) của một nhân sự khỏi các file CSV khi bị xóa trên Cloud
+ * @param {string} personId - ID nhân sự cần xóa
+ * @param {string} personName - Họ và tên nhân sự (tùy chọn)
+ * @returns {Array<string>} Danh sách các file CSV đã được cập nhật
+ */
+function removePersonFromCsv(personId, personName = '') {
+  if (!personId && !personName) return [];
+  const updatedFiles = [];
+  if (!fs.existsSync(DATA_DIR)) return updatedFiles;
+
+  const targetId = String(personId || '').trim();
+  const targetNormName = normalizeName(personName);
+
+  const files = fs.readdirSync(DATA_DIR).filter(f => f.toLowerCase().endsWith('.csv') && !f.includes('.bak'));
+
+  for (const file of files) {
+    const filePath = path.join(DATA_DIR, file);
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const lines = content.split(/\r?\n/).filter(l => l.trim().length > 0);
+      let fileModified = false;
+
+      const newLines = lines.map((line, idx) => {
+        if (idx === 0 && line.toLowerCase().startsWith('tên,')) return line;
+        const parts = line.split(',');
+        if (parts.length < 4) return line;
+
+        const rowName = normalizeName(parts[0]);
+        const rowId = (parts[5] || '').trim();
+
+        // Khớp PersonID hoặc khớp Tên khi ID khớp
+        if ((targetId && rowId === targetId) || (targetNormName && rowName === targetNormName && (!rowId || rowId === targetId))) {
+          parts[4] = '""';
+          parts[5] = '""';
+          fileModified = true;
+          return parts.join(',');
+        }
+        return line;
+      });
+
+      if (fileModified) {
+        fs.writeFileSync(filePath, newLines.join('\n') + '\n', 'utf-8');
+        updatedFiles.push(file);
+        console.log(`🧹 [CSV Service] Đã xóa Face ID & PersonID trong file ${file} cho ID: ${personId}`);
+      }
+    } catch (err) {
+      console.warn(`[CSV Service] Lỗi khi reset person trong file ${file}:`, err.message);
+    }
+  }
+
+  return updatedFiles;
+}
+
 module.exports = {
   getFilePath,
   readList,
   appendPerson,
   writeBackRegistration,
-  normalizeName
+  normalizeName,
+  removePersonFromCsv
 };

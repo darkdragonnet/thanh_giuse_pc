@@ -55,6 +55,14 @@
             </button>
           </div>
         </form>
+
+        <hr class="my-3">
+        <form method="POST" action="/delete/<%= person.id || person.personID %>?_method=DELETE" onsubmit="return confirm('⚠️ CẢNH BÁO: Bạn có chắc chắn muốn xóa vĩnh viễn nhân sự &quot;<%= (person.name || '').replace(/\"/g, '&quot;') %>&quot; (ID: <%= person.id || person.personID %>) khỏi Cloud HANET và hệ thống không?');">
+          <input type="hidden" name="personName" value="<%= person.name || '' %>">
+          <button type="submit" class="btn btn-outline-danger w-100 py-2">
+            <i class="bi bi-trash3 me-1"></i>Xóa Nhân Sự Khỏi Hệ Thống
+          </button>
+        </form>
       </div>
     </div>
   </div>
