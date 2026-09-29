@@ -375,3 +375,35 @@ exports.renderCheckin = async (req, res, next) => {
     res.render('person/checkin', { title: 'Nhật ký Check-in', logs: [] });
   }
 };
+
+// [READ] Quản lý Dead Letter Queue (DLQ)
+exports.viewDLQ = async (req, res, next) => {
+  try {
+    const jobs = await queueService.getDLQJobs(0, 50);
+    res.json({ success: true, count: jobs.length, jobs });
+  } catch (err) {
+    console.error('[viewDLQ Error]', err.message);
+    res.status(500).json({ error: `Không thể đọc DLQ: ${err.message}` });
+  }
+};
+
+// [SYNC] Kích hoạt đồng bộ Cloud to CSV
+exports.triggerSync = async (req, res, next) => {
+  try {
+    const listRes = await hanetService.getListByPlace();
+    const count = listRes?.data?.length || 0;
+    req.flash('success', `Đã kích hoạt đồng bộ dữ liệu. Tổng số nhân sự Cloud: ${count}`);
+    res.redirect('/');
+  } catch (err) {
+    req.flash('error', `Lỗi đồng bộ: ${err.message}`);
+    res.redirect('/');
+  }
+};
+
+// Aliases cho routing tương thích
+exports.list = exports.listPersons;
+exports.showLinks = exports.viewLinks;
+exports.showRegisterForm = exports.viewRegisterByFile;
+exports.update = exports.handleUpdate;
+exports.delete = exports.handleDelete;
+

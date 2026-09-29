@@ -146,7 +146,7 @@
               <!-- Cột 1: Ảnh Face -->
               <td class="text-center py-2">
                 <% if (p.avatar && p.avatar.trim()) { %>
-                  <img src="<%= p.avatar %>" alt="avatar" class="rounded-circle shadow-sm" style="width: 42px; height: 42px; object-fit: cover; border: 2px solid #e9ecef;" onerror="this.onerror=null; this.src='/images/default-avatar.png'">
+                  <img src="<%= p.avatar %>" alt="avatar" class="rounded-circle shadow-sm" style="width: 42px; height: 42px; object-fit: cover; border: 2px solid #e9ecef;" onerror="this.onerror=null;this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23ccc\' stroke-width=\'1.5\'><circle cx=\'12\' cy=\'8\' r=\'4\'/><path d=\'M4 20c0-4 4-6 8-6s8 2 8 6\'/></svg>';">
                 <% } else { %>
                   <div class="rounded-circle bg-light border text-secondary d-inline-flex align-items-center justify-content-center" style="width: 42px; height: 42px;">
                     <i class="bi bi-person-fill fs-5 opacity-50"></i>

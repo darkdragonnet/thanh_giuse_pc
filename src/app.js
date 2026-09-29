@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const morgan = require('morgan');
 const methodOverride = require('method-override');
 const session = require('express-session');
@@ -9,7 +10,7 @@ const { RedisStore } = require('connect-redis');
 const { createClient } = require('redis');
 const dotenv = require('dotenv');
 const imageService = require('./services/imageService');
-const authMiddleware = require('./middlewares/authMiddleware');
+const defaultAuthMiddleware = require('./middlewares/authMiddleware');
 
 dotenv.config();
 
@@ -63,27 +64,59 @@ app.set('layout', 'layout');
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.static(path.join(__dirname, '../public')));
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// Middleware xử lý fallback cho ảnh bị dọn dẹp sau 30s (RULE-022)
+app.get('/uploads/:filename', (req, res) => {
+  const filePath = path.join(__dirname, '../uploads', req.params.filename);
+
+  // 1. File vẫn tồn tại (trong khoảng 30s đầu)
+  if (fs.existsSync(filePath)) {
+    return res.sendFile(filePath);
+  }
+
+  // 2. File đã bị dọn dẹp (RULE-022) -> Trả về ảnh mặc định nếu có
+  const defaultAvatarPath = path.join(__dirname, '../public/images/default-avatar.png');
+  if (fs.existsSync(defaultAvatarPath)) {
+    return res.sendFile(defaultAvatarPath);
+  }
+
+  // 3. Fallback cuối cùng: Trả về 1 ảnh SVG 1x1 trong suốt với HTTP 200 (Tránh 404 hoàn toàn)
+  res.setHeader('Content-Type', 'image/svg+xml');
+  return res.send(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1">
+      <rect width="1" height="1" fill="transparent"/>
+    </svg>
+  `);
+});
 
 // Middleware biến toàn cục cho Views
 app.use((req, res, next) => {
   res.locals.success = req.flash('success');
   res.locals.error = req.flash('error');
   res.locals.currentPath = req.path;
+  res.locals.user = req.session?.user || null;
   next();
 });
 
-// Middleware xác thực Token quản trị (Bảo vệ các route riêng tư)
-app.use(authMiddleware);
+// Tự động nhận diện token từ query (?token=...) mà KHÔNG chặn route công khai
+app.use(defaultAuthMiddleware);
 
-// Mount Routes
-app.use('/departments', departmentRoutes);
-app.use('/', personRoutes);
+// Triệt tiêu log rác favicon 404
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
+// Chuyển hướng trang chủ về danh sách liên kết
+app.get('/', (req, res) => {
+  return res.redirect('/links');
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', architecture: 'Cloud-First (No-DB)' });
 });
+
+// Mount Routes
+app.use('/departments', departmentRoutes);
+app.use('/', personRoutes);
 
 app.listen(PORT, () => {
   console.log(`🚀 Server dang chay tai: http://localhost:${PORT}`);

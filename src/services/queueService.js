@@ -8,8 +8,20 @@ const csvService = require('./csvService');
 const idempotencyService = require('./idempotencyService');
 const { getErrorMessage } = require('../utils/hanetErrorMap');
 
-// Danh sách mã lỗi không thể phục hồi bằng retry tự động (lỗi tham số, lỗi ảnh, lỗi quyền)
-const NON_RETRIABLE_CODES = new Set([
+/**
+ * Lớp lỗi đại diện cho các lỗi vĩnh viễn không thể khôi phục bằng retry
+ */
+class UnrecoverableError extends Error {
+  constructor(message, code = null) {
+    super(message);
+    this.name = 'UnrecoverableError';
+    this.code = code;
+    this.isUnrecoverable = true;
+  }
+}
+
+// Danh sách mã lỗi vĩnh viễn không thể phục hồi bằng retry tự động (lỗi tham số, lỗi ảnh, lỗi quyền)
+const PERMANENT_ERROR_CODES = new Set([
   -1, -1005, -2035, -5005, -5006, -5010, -5011, -9002, -9005, -9006, -9008
 ]);
 
@@ -202,21 +214,57 @@ async function resolveDepartmentAndAlias(className, inputTitle = '', inputDeptID
   };
 }
 
-// Khởi tạo Bull Queue chạy trên Redis DB 4
-const hanetQueue = new Queue('hanet-sync', {
-  redis: {
-    host: process.env.REDIS_HOST || 'redis',
-    port: parseInt(process.env.REDIS_PORT || '6379', 10),
-    db: parseInt(process.env.REDIS_DB || '4', 10)
-  },
+// Cấu hình kết nối Redis DB 4 dùng chung
+const redisConfig = {
+  host: process.env.REDIS_HOST || 'localhost',
+  port: parseInt(process.env.REDIS_PORT || '6379', 10),
+  db: parseInt(process.env.REDIS_DB || '4', 10)
+};
+
+// 1. Khởi tạo Hàng Đợi Chính (hanet-registration)
+const registrationQueue = new Queue('hanet-registration', {
+  redis: redisConfig,
   defaultJobOptions: {
-    attempts: 5,
+    attempts: 3,
     backoff: {
       type: 'exponential',
-      delay: 3000 // 3s, 6s, 12s, 24s, 48s
+      delay: 2000 // Thử lại sau 2s, 4s, 8s
     },
-    removeOnComplete: 100,
-    removeOnFail: 200
+    removeOnComplete: 100, // Giữ 100 job hoàn tất gần nhất
+    removeOnFail: false    // Giữ job thất bại để phân tích và chuyển DLQ
+  }
+});
+
+// Alias tương thích ngược
+const hanetQueue = registrationQueue;
+
+// 2. Khởi tạo Dead Letter Queue (DLQ) lưu trữ các job thất bại vĩnh viễn
+const deadLetterQueue = new Queue('hanet-registration-dlq', {
+  redis: redisConfig
+});
+
+// 3. Lắng nghe sự kiện thất bại của Queue chính để chuyển sang Dead Letter Queue (DLQ)
+registrationQueue.on('failed', async (job, err) => {
+  const isUnrecoverable = err && (err.name === 'UnrecoverableError' || err.isUnrecoverable);
+  const isMaxAttempts = job.attemptsMade >= job.opts.attempts;
+
+  if (isMaxAttempts || isUnrecoverable) {
+    console.error(`[DLQ ROUTE] Job ${job.id} (${job.name}) thất bại (attempts: ${job.attemptsMade}/${job.opts.attempts}, unrecoverable: ${isUnrecoverable}). Đang chuyển sang DLQ. Lý do: ${err.message}`);
+    try {
+      await deadLetterQueue.add({
+        originalJobId: job.id,
+        jobName: job.name,
+        jobData: job.data,
+        failedReason: err.message,
+        errorCode: err.code || null,
+        stacktrace: job.stacktrace || (err.stack ? [err.stack] : []),
+        attemptsMade: job.attemptsMade,
+        failedAt: new Date().toISOString()
+      });
+      console.log(`[DLQ ROUTE] ✅ Đã lưu job ${job.id} vào Dead Letter Queue (hanet-registration-dlq).`);
+    } catch (dlqErr) {
+      console.error('[DLQ ROUTE ERROR] Không thể đẩy job vào Dead Letter Queue:', dlqErr.message);
+    }
   }
 });
 
@@ -343,7 +391,7 @@ async function handleFaceExistsFallback({
 }
 
 // Xử lý Job đăng ký nhân sự ngầm
-hanetQueue.process('register_person_job', 2, async (job) => {
+registrationQueue.process('register_person_job', 2, async (job) => {
   const { name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename, source_csv, className, class_name, existing_person_id } = job.data;
   const targetClass = source_csv || className || class_name || null;
   const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
@@ -376,7 +424,7 @@ hanetQueue.process('register_person_job', 2, async (job) => {
     throw new Error(`[CONCURRENCY] Job cho ${finalAlias} đang được xử lý bởi worker khác.`);
   }
 
-  console.log(`[Queue register_person_job] Bắt đầu xử lý: ${name} (${finalAlias}) | Chức vụ: ${finalTitle} | Phòng ban: ${resolved.departmentName} (${finalDeptID})`);
+  console.log(`[Queue register_person_job] (Attempt ${job.attemptsMade + 1}/${job.opts.attempts}) Bắt đầu xử lý: ${name} (${finalAlias}) | Chức vụ: ${finalTitle} | Phòng ban: ${resolved.departmentName} (${finalDeptID})`);
 
   let finalPersonID = existing_person_id || null;
   let finalAvatarUrl = faceUrl;
@@ -453,10 +501,11 @@ hanetQueue.process('register_person_job', 2, async (job) => {
         const errorMsg = getErrorMessage(registerRes?.returnCode, registerRes?.returnMessage);
         const code = Number(registerRes?.returnCode);
 
-        // Kiểm tra nếu là lỗi vĩnh viễn -> không retry vô ích
-        if (NON_RETRIABLE_CODES.has(code)) {
-          console.error(`[Queue register_person_job] ❌ Lỗi không thể retry (Mã ${code}): ${errorMsg}`);
-          return { returnCode: code, returnMessage: errorMsg, error: true };
+        // Kiểm tra lỗi vĩnh viễn (Permanent / Unrecoverable Failure) -> dừng retry ngay và đưa sang DLQ
+        if (PERMANENT_ERROR_CODES.has(code)) {
+          console.error(`[Queue register_person_job] ❌ Lỗi vĩnh viễn không thể retry (Mã ${code}): ${errorMsg}`);
+          job.discard(); // Hủy retry trong Bull
+          throw new UnrecoverableError(errorMsg, code);
         }
 
         // Lỗi tạm thời -> giải phóng lock để Bull Queue retry
@@ -464,6 +513,11 @@ hanetQueue.process('register_person_job', 2, async (job) => {
         throw new Error(`[Mã lỗi ${registerRes?.returnCode}]: ${errorMsg}`);
       }
     } catch (apiErr) {
+      // Nếu đã là UnrecoverableError thì rethrow trực tiếp
+      if (apiErr instanceof UnrecoverableError || apiErr.name === 'UnrecoverableError') {
+        throw apiErr;
+      }
+
       const errData = apiErr.response?.data;
       const code = Number(errData?.returnCode || apiErr.code);
 
@@ -491,9 +545,10 @@ hanetQueue.process('register_person_job', 2, async (job) => {
         const errorMsg = getErrorMessage(code, apiErr.message);
         console.error(`[Queue register_person_job] Lỗi khi xử lý: ${errorMsg}`);
 
-        if (NON_RETRIABLE_CODES.has(code)) {
-          console.error(`[Queue register_person_job] ❌ Bỏ qua retry cho mã lỗi ${code}`);
-          return { returnCode: code, returnMessage: errorMsg, error: true };
+        if (PERMANENT_ERROR_CODES.has(code)) {
+          console.error(`[Queue register_person_job] ❌ Lỗi vĩnh viễn không thể retry (Mã ${code}): ${errorMsg}`);
+          job.discard(); // Hủy retry trong Bull
+          throw new UnrecoverableError(errorMsg, code);
         }
 
         // Lỗi tạm thời -> giải phóng lock để Bull Queue retry
@@ -511,7 +566,7 @@ hanetQueue.process('register_person_job', 2, async (job) => {
 });
 
 // Xử lý Job cập nhật nhân sự ngầm
-hanetQueue.process('update_person_job', 3, async (job) => {
+registrationQueue.process('update_person_job', 3, async (job) => {
   const { personID, name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename } = job.data;
   const lockKey = idempotencyService.generateKey('PERSON_UPDATE', personID);
 
@@ -528,7 +583,7 @@ hanetQueue.process('update_person_job', 3, async (job) => {
     throw new Error(`[CONCURRENCY] Job cập nhật cho ${personID} đang được xử lý bởi worker khác.`);
   }
 
-  console.log(`[Queue update_person_job] Bắt đầu xử lý: ${name} (${personID})`);
+  console.log(`[Queue update_person_job] (Attempt ${job.attemptsMade + 1}/${job.opts.attempts}) Bắt đầu xử lý: ${name} (${personID})`);
 
   try {
     try {
@@ -544,9 +599,10 @@ hanetQueue.process('update_person_job', 3, async (job) => {
       if (infoResult.returnCode !== 1) {
         const errorMsg = getErrorMessage(infoResult.returnCode, infoResult.returnMessage);
         const code = Number(infoResult.returnCode);
-        if (NON_RETRIABLE_CODES.has(code)) {
-          console.error(`[Queue update_person_job] ❌ Lỗi không thể retry (Mã ${code}): ${errorMsg}`);
-          return { returnCode: code, returnMessage: errorMsg, error: true };
+        if (PERMANENT_ERROR_CODES.has(code)) {
+          console.error(`[Queue update_person_job] ❌ Lỗi vĩnh viễn không thể retry (Mã ${code}): ${errorMsg}`);
+          job.discard();
+          throw new UnrecoverableError(errorMsg, code);
         }
         await idempotencyService.releaseLock(lockKey);
         throw new Error(`[Mã lỗi ${infoResult.returnCode}]: ${errorMsg}`);
@@ -575,9 +631,10 @@ hanetQueue.process('update_person_job', 3, async (job) => {
         if (faceResult.returnCode !== 1) {
           const errorMsg = getErrorMessage(faceResult.returnCode, faceResult.returnMessage);
           const code = Number(faceResult.returnCode);
-          if (NON_RETRIABLE_CODES.has(code)) {
-            console.error(`[Queue update_person_job] ❌ Lỗi không thể retry khi cập nhật ảnh (Mã ${code}): ${errorMsg}`);
-            return { returnCode: code, returnMessage: errorMsg, error: true };
+          if (PERMANENT_ERROR_CODES.has(code)) {
+            console.error(`[Queue update_person_job] ❌ Lỗi vĩnh viễn không thể retry khi cập nhật ảnh (Mã ${code}): ${errorMsg}`);
+            job.discard();
+            throw new UnrecoverableError(errorMsg, code);
           }
           await idempotencyService.releaseLock(lockKey);
           throw new Error(`[Mã lỗi ${faceResult.returnCode}]: ${errorMsg}`);
@@ -589,6 +646,9 @@ hanetQueue.process('update_person_job', 3, async (job) => {
 
       return { success: true, personID };
     } catch (err) {
+      if (err instanceof UnrecoverableError || err.name === 'UnrecoverableError') {
+        throw err;
+      }
       await idempotencyService.releaseLock(lockKey);
       throw err;
     }
@@ -600,8 +660,95 @@ hanetQueue.process('update_person_job', 3, async (job) => {
   }
 });
 
+/**
+ * Lấy danh sách các jobs trong Dead Letter Queue (DLQ)
+ * @param {number} start - Vị trí bắt đầu
+ * @param {number} end - Vị trí kết thúc
+ * @returns {Promise<Array<Object>>}
+ */
+async function getDLQJobs(start = 0, end = 50) {
+  try {
+    const jobs = await deadLetterQueue.getJobs(['waiting', 'active', 'completed', 'failed', 'delayed'], start, end, true);
+    return jobs.map(j => ({
+      id: j.id,
+      name: j.name,
+      data: j.data,
+      timestamp: j.timestamp,
+      processedOn: j.processedOn,
+      finishedOn: j.finishedOn,
+      failedReason: j.failedReason || j.data?.failedReason
+    }));
+  } catch (err) {
+    console.error('[DLQ Service] Lỗi khi lấy danh sách DLQ jobs:', err.message);
+    return [];
+  }
+}
+
+/**
+ * Đẩy lại (Retry) thủ công một job từ Dead Letter Queue vào Queue chính
+ * @param {string|number} dlqJobId - ID của job trong DLQ
+ * @returns {Promise<{ success: boolean, message: string, newJobId?: string|number }>}
+ */
+async function retryDLQJob(dlqJobId) {
+  try {
+    const dlqJob = await deadLetterQueue.getJob(dlqJobId);
+    if (!dlqJob) {
+      return { success: false, message: `Không tìm thấy job DLQ với ID: ${dlqJobId}` };
+    }
+
+    const originalData = dlqJob.data?.jobData || dlqJob.data;
+    const jobName = dlqJob.data?.jobName || 'register_person_job';
+
+    // Giải phóng lock Idempotency cũ nếu có để cho phép xử lý lại
+    if (originalData.aliasID) {
+      const lockKey = idempotencyService.generateKey('FACE_REGISTER', originalData.aliasID);
+      await idempotencyService.releaseLock(lockKey);
+    }
+    if (originalData.personID) {
+      const lockKey = idempotencyService.generateKey('PERSON_UPDATE', originalData.personID);
+      await idempotencyService.releaseLock(lockKey);
+    }
+
+    // Đẩy lại vào hàng đợi chính
+    const newJob = await registrationQueue.add(jobName, originalData);
+
+    // Xóa khỏi DLQ sau khi đã tái nạp thành công
+    await dlqJob.remove();
+
+    console.log(`[DLQ Retry] Đã tái nạp thành công job DLQ ${dlqJobId} thành Job mới ${newJob.id}`);
+    return {
+      success: true,
+      message: `Đã tái nạp thành công vào hàng đợi chính với Job ID: ${newJob.id}`,
+      newJobId: newJob.id
+    };
+  } catch (err) {
+    console.error(`[DLQ Retry Error] Không thể retry job DLQ ${dlqJobId}:`, err.message);
+    return { success: false, message: err.message };
+  }
+}
+
+/**
+ * Xóa toàn bộ jobs trong DLQ
+ */
+async function clearDLQ() {
+  try {
+    await deadLetterQueue.empty();
+    return { success: true, message: 'Đã dọn sạch Dead Letter Queue' };
+  } catch (err) {
+    console.error('[DLQ Service] Lỗi dọn DLQ:', err.message);
+    return { success: false, message: err.message };
+  }
+}
+
 module.exports = {
   resolveDepartmentAndAlias,
-  enqueueRegisterPerson: (payload) => hanetQueue.add('register_person_job', payload),
-  enqueueUpdatePerson: (payload) => hanetQueue.add('update_person_job', payload)
+  enqueueRegisterPerson: (payload) => registrationQueue.add('register_person_job', payload),
+  enqueueUpdatePerson: (payload) => registrationQueue.add('update_person_job', payload),
+  getDLQJobs,
+  retryDLQJob,
+  clearDLQ,
+  registrationQueue,
+  hanetQueue,
+  deadLetterQueue,
+  UnrecoverableError
 };

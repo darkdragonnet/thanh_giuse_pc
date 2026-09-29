@@ -82,7 +82,7 @@
                 <tr>
                   <td><%= index + 1 %></td>
                   <td>
-                    <img src="<%= m.avatar || 'https://via.placeholder.com/36' %>" class="rounded-circle border" style="width: 36px; height: 36px; object-fit: cover;">
+                    <img src="<%= m.avatar || '/images/default-avatar.png' %>" alt="Avatar" class="rounded-circle border" style="width: 36px; height: 36px; object-fit: cover;" onerror="this.onerror=null;this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23ccc\' stroke-width=\'1.5\'><circle cx=\'12\' cy=\'8\' r=\'4\'/><path d=\'M4 20c0-4 4-6 8-6s8 2 8 6\'/></svg>';">
                   </td>
                   <td class="fw-bold text-primary"><%= m.name %></td>
                   <td><span class="badge bg-secondary"><%= m.aliasID || m.alias_id || '—' %></span></td>

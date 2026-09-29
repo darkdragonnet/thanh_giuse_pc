@@ -98,8 +98,11 @@ Hệ thống sử dụng **Cloud-First** kết hợp **File-Based CSV Database**
   + `getPersonByAliasID(aliasID)`: Tra cứu tức thì nhân sự qua MSNV.
   + `addPersonsToDepartment(departmentID, personIDs)`: Khóa phân quyền nhân sự vào phòng ban trên Cloud.
 - **[`queueService.js`](file:///Users/dragon/thanh_giuse_pc/src/services/queueService.js):**
-  + Điều phối hàng đợi Bull Queue chạy trên Redis DB 4.
+  + Điều phối hàng đợi Bull Queue chính `hanet-registration` và hàng đợi chết `hanet-registration-dlq` trên Redis DB 4.
+  + Cấu hình Retry lũy thừa (`attempts: 3`, `backoff: exponential 2000ms`: 2s, 4s, 8s).
+  + Định nghĩa lớp lỗi `UnrecoverableError`: Khi gặp lỗi vĩnh viễn (`-9002`, `-9005`, `-9006`), tự động dừng retry (`job.discard()`) và chuyển job sang Dead Letter Queue (DLQ).
   + Bắt mã lỗi `-9007` (*Face already exists*), trích xuất `personID` linh hoạt qua `extractPersonIDFromHanet`, chuyển tiếp sang hàm xử lý `handleFaceExistsFallback` để cập nhật Face ID, thông tin cá nhân và khóa phòng ban mà không crash tiến trình.
+  + Cung cấp các hàm tiện ích quản trị DLQ: `getDLQJobs()`, `retryDLQJob(dlqJobId)`, `clearDLQ()`.
   + Tuân thủ RULE-022: `cleanupDelayed(imagePath, 30000)` trì hoãn 30 giây mới xóa file ảnh tạm để HANET Cloud hoàn tất tải.
 - **[`csvService.js`](file:///Users/dragon/thanh_giuse_pc/src/services/csvService.js):**
   + Đọc/ghi file CSV với chuẩn UTF-8.
@@ -114,7 +117,16 @@ Hệ thống sử dụng **Cloud-First** kết hợp **File-Based CSV Database**
   + Chuẩn hóa kích thước khung hình HANET `1280x738` bằng Sharp.
   + Nén chất lượng ảnh JPEG tối ưu nhận diện, hỗ trợ cả upload file lẫn chuỗi Base64 từ canvas.
 
-### 2.2 Views (`src/views/`)
+### 2.2 Middlewares (`src/middlewares/`)
+- **[`authMiddleware.js`](file:///Users/dragon/thanh_giuse_pc/src/middlewares/authMiddleware.js):**
+  + Quản lý xác thực và phân quyền theo vai trò (RBAC) với 4 Roles: `SUPER_ADMIN`, `ADMIN`, `GROUP_LEADER`, `PUBLIC_USER`.
+  + Tự động nhận diện danh tính qua Session hoặc Token (`?token=...` / `Bearer ...`).
+  + `authorize(allowedRoles)`: Chặn truy cập trái phép (401/403) đối với các endpoint nhạy cảm, đồng thời mở công khai 100% cho các route Zalo WebView (`/register`, `/register/:file_name`, `/links`).
+- **[`auditMiddleware.js`](file:///Users/dragon/thanh_giuse_pc/src/middlewares/auditMiddleware.js):**
+  + Ghi nhận nhật ký hệ thống có cấu trúc (Structured Audit Log) cho toàn bộ thao tác CUD / Sync.
+  + Tự động lưu trữ dạng JSON Lines tại `logs/audit.log` và in trực tiếp ra Terminal với tiền tố `[AUDIT]`.
+
+### 2.3 Views (`src/views/`)
 - **[`register.ejs`](file:///Users/dragon/thanh_giuse_pc/src/views/register.ejs):**
   + Tích hợp đầy đủ thẻ meta chống cache trên Zalo WebView:
     ```html
@@ -128,7 +140,7 @@ Hệ thống sử dụng **Cloud-First** kết hợp **File-Based CSV Database**
 - **[`layout.ejs`](file:///Users/dragon/thanh_giuse_pc/src/views/layout.ejs):**
   + Master layout chuẩn Bootstrap 5, tích hợp thanh điều hướng (Nhân sự Cloud, Link Đăng Ký Theo Lớp, Check-in Realtime) và thẻ meta chống cache toàn diện.
 
-### 2.3 Scripts Tự Động Hóa (`scripts/`)
+### 2.4 Scripts Tự Động Hóa (`scripts/`)
 - **[`sync_cloud_to_csv.js`](file:///Users/dragon/thanh_giuse_pc/scripts/sync_cloud_to_csv.js):**
   + Đồng bộ dữ liệu 2 chiều giữa Cloud HANET và toàn bộ file `data/*.csv`.
   + Sử dụng bộ index kép `cloudById`, `cloudByNameAndClass`, `cloudByName` chống trùng tên cho hơn 2.000 nhân sự.
@@ -138,7 +150,7 @@ Hệ thống sử dụng **Cloud-First** kết hợp **File-Based CSV Database**
 - **[`sync_83_faceids_to_csv.js`](file:///Users/dragon/thanh_giuse_pc/scripts/sync_83_faceids_to_csv.js):**
   + Script chuyên dụng đồng bộ toàn bộ FaceID hiện có trên Cloud vào CSV tương ứng theo tên lớp bóc tách từ AliasID.
 
-### 2.4 Cấu Hình Hạ Tầng (`docker-compose.yml`)
+### 2.5 Cấu Hình Hạ Tầng (`docker-compose.yml`)
 ```yaml
 services:
   app:
@@ -208,9 +220,49 @@ services:
 | **`-103`** | **Access Token Expired** | Tạm thời | Tự động gọi OAuth2 lấy token mới và retry ngay lập tức. |
 | **`-5011`** | **Không tìm thấy nhân sự** | Nghiệp vụ | Log cảnh báo, chuyển sang tạo mới hoặc kiểm tra lại mã AliasID/PersonID. |
 | **`-9007`** | **Khuôn mặt đã tồn tại (Face exists)** | Nghiệp vụ Fallback | Trích xuất `personID` từ phản hồi hoặc tra cứu qua AliasID -> Chuyển hướng sang gọi `updateByFaceUrl` và `updateInfo` -> Khóa phòng ban -> Ghi ngược CSV thành công. |
-| **`-9002`** | **Không phát hiện khuôn mặt** | Lỗi vĩnh viễn | Bỏ qua retry vô ích, phản hồi thông báo lỗi rõ ràng cho người dùng chụp lại. |
-| **`-9005`** | **Ảnh quá mờ / không đạt chuẩn** | Lỗi vĩnh viễn | Dừng retry, yêu cầu người dùng chụp trong điều kiện đủ sáng. |
-| **`-9006`** | **Phát hiện nhiều hơn 1 khuôn mặt** | Lỗi vĩnh viễn | Dừng retry, yêu cầu người dùng chỉ đứng 1 mình trong khung hình. |
+| **`-9002`** | **Không phát hiện khuôn mặt** | Lỗi vĩnh viễn | Bỏ qua retry vô ích, chuyển vào DLQ và thông báo lỗi rõ ràng. |
+| **`-9005`** | **Ảnh quá mờ / không đạt chuẩn** | Lỗi vĩnh viễn | Dừng retry, chuyển vào DLQ, yêu cầu chụp trong điều kiện đủ sáng. |
+| **`-9006`** | **Phát hiện nhiều hơn 1 khuôn mặt** | Lỗi vĩnh viễn | Dừng retry, chuyển vào DLQ, yêu cầu chỉ đứng 1 mình trong khung hình. |
+
+### 3.3 Ma Trận Phân Quyền (RBAC Matrix) & Đặc Tả Audit Log
+- **Bảng Ma Trận Phân Quyền (Role-Based Access Control):**
+  | Quyền Hạn / Chức Năng | SUPER_ADMIN | ADMIN | GROUP_LEADER | PUBLIC_USER |
+  | :--- | :---: | :---: | :---: | :---: |
+  | Đăng ký Face cá nhân (Form/Zalo) | ✔ | ✔ | ✔ | ✔ |
+  | Xem danh mục link lớp (`/links`) | ✔ | ✔ | ✔ | ✔ |
+  | Xem danh sách lớp mình phụ trách | ✔ | ✔ | ✔ | ✗ |
+  | Sửa thông tin / Cập nhật Face ID | ✔ | ✔ | ✔ | ✗ |
+  | Xem danh sách toàn hệ thống | ✔ | ✔ | ✗ | ✗ |
+  | Xóa nhân sự trên Cloud | ✔ | ✔ | ✗ | ✗ |
+  | Kích hoạt đồng bộ Cloud (`/sync/*`) | ✔ | ✔ | ✗ | ✗ |
+  | Quản trị DLQ & Retry thất bại | ✔ | ✔ | ✗ | ✗ |
+  | Quản trị Users & System Token | ✔ | ✗ | ✗ | ✗ |
+
+- **Cấu Trúc JSON Lines của Audit Log (`logs/audit.log`):**
+  ```json
+  {
+    "timestamp": "2026-09-29T16:20:00.000Z",
+    "actor": {
+      "userId": "admin_sys",
+      "username": "superadmin",
+      "role": "SUPER_ADMIN",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0..."
+    },
+    "action": "UPDATE_PERSON_INFO",
+    "target": {
+      "aliasId": "TN_GLV_98CD",
+      "personId": "123456",
+      "className": "GLV"
+    },
+    "changes": {
+      "before": { "title": "Giáo Lý Viên" },
+      "after": { "title": "Phụ Trách Khối" }
+    },
+    "statusCode": 200,
+    "result": "SUCCESS"
+  }
+  ```
 
 ---
 
@@ -287,11 +339,14 @@ docker compose exec app node scripts/restore_departments_by_alias.js
 docker compose exec app node scripts/sync_83_faceids_to_csv.js
 ```
 
-### 5.3 Lệnh Kiểm Tra Redis Queue
+### 5.3 Lệnh Kiểm Tra Redis Queue & Dead Letter Queue (DLQ)
 
 ```bash
-# Kiểm tra số lượng job đang chờ hoặc xử lý trong Redis DB 4
-docker compose exec redis redis-cli -n 4 keys "bull:hanet-sync:*"
+# Kiểm tra số lượng job đang chờ hoặc xử lý trong Queue chính
+docker compose exec redis redis-cli -n 4 keys "bull:hanet-registration:*"
+
+# Kiểm tra các job thất bại trong Dead Letter Queue (DLQ)
+docker compose exec redis redis-cli -n 4 keys "bull:hanet-registration-dlq:*"
 ```
 
 ---
