@@ -2,7 +2,6 @@ const path = require('path');
 const hanetService = require('../services/hanetService');
 const imageService = require('../services/imageService');
 const queueService = require('../services/queueService');
-const csvService = require('../services/csvService');
 const { pool } = require('../config/database');
 const { getErrorMessage } = require('../utils/hanetErrorMap');
 
@@ -314,7 +313,6 @@ exports.handleUpdate = async (req, res, next) => {
 // [DELETE] Xử lý Xóa Nhân sự trên HANET Cloud & PostgreSQL
 exports.handleDelete = async (req, res, next) => {
   const personID = req.params.personID || req.params.id || req.body.personID;
-  const personName = req.body.personName || req.body.name || '';
 
   if (!personID) {
     req.flash('error', 'Không tìm thấy ID nhân sự để xóa.');
@@ -322,14 +320,11 @@ exports.handleDelete = async (req, res, next) => {
   }
 
   try {
-    // 1. Xóa trong PostgreSQL
+    // 1. Xóa trực tiếp trong Database PostgreSQL
     await pool.query('DELETE FROM persons WHERE alias_id = $1 OR person_id = $1', [String(personID)]);
 
     // 2. Gọi API xóa nhân sự trên HANET Cloud
     const result = await hanetService.removePerson(personID);
-
-    // 3. Tự động đồng bộ xóa trong file CSV nếu có (fail-soft)
-    csvService.removePersonFromCsv(personID, personName);
 
     if (result && result.returnCode === 1) {
       req.flash('success', `Đã xóa thành công nhân sự [ID: ${personID}] khỏi hệ thống.`);

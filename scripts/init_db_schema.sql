@@ -41,9 +41,26 @@ CREATE TABLE IF NOT EXISTS persons (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 4. BỘ CHỈ MỤC TỐI ƯU HÓA TRUY VẤN (Indexes)
+-- 4. BẢNG NHẬT KÝ HỆ THỐNG (Audit Logs)
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+    action VARCHAR(100) NOT NULL,
+    user_id VARCHAR(100) DEFAULT 'ANONYMOUS',
+    username VARCHAR(100),
+    role VARCHAR(50),
+    status_code INT,
+    ip_address VARCHAR(50),
+    user_agent TEXT,
+    target_id VARCHAR(150),
+    details JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 5. BỘ CHỈ MỤC TỐI ƯU HÓA TRUY VẤN (Indexes)
 CREATE INDEX IF NOT EXISTS idx_persons_alias ON persons(alias_id);
 CREATE INDEX IF NOT EXISTS idx_persons_name_class ON persons(name, class_name);
 CREATE INDEX IF NOT EXISTS idx_persons_person_id ON persons(person_id);
 CREATE INDEX IF NOT EXISTS idx_persons_sync_status ON persons(sync_status);
 CREATE INDEX IF NOT EXISTS idx_classes_name ON classes(name);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);

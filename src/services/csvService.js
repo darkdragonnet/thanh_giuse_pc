@@ -1,3 +1,10 @@
+/**
+ * @deprecated
+ * [DEPRECATED - PHASE 3] Module này đã ngừng sử dụng trong luồng vận hành chính.
+ * Toàn bộ dữ liệu lớp học và nhân sự đã được chuyển sang cơ sở dữ liệu PostgreSQL.
+ * File này chỉ được giữ lại cho mục đích backup / migration lịch sử.
+ */
+
 const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parser');

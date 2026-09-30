@@ -4,8 +4,8 @@ const crypto = require('crypto');
 const Queue = require('bull');
 const hanetService = require('./hanetService');
 const imageService = require('./imageService');
-const csvService = require('./csvService');
 const idempotencyService = require('./idempotencyService');
+const { pool } = require('../config/database');
 const { getErrorMessage } = require('../utils/hanetErrorMap');
 
 /**
@@ -81,70 +81,66 @@ async function resolveDepartmentAndAlias(className, inputTitle = '', inputDeptID
   const cleanClass = (className || '').replace(/\.csv$/i, '').trim();
   const normalizedClass = normalizeClassNameForAlias(cleanClass);
 
-  // 1. Đọc dữ liệu từ file CSV mẫu trong data/ nếu có
-  let csvDept = '';
-  let csvTitle = '';
+  // 1. Tra cứu phòng ban từ PostgreSQL classes table
+  let dbDeptId = '';
   if (cleanClass) {
-    const dataDir = path.join(process.cwd(), 'data');
-    const filePath = path.join(dataDir, `${cleanClass}.csv`);
-    if (fs.existsSync(filePath)) {
-      try {
-        const content = fs.readFileSync(filePath, 'utf-8');
-        const lines = content.split(/\r?\n/).filter(l => l.trim().length > 0);
-        if (lines.length > 1) {
-          const lastLineParts = lines[lines.length - 1].split(',');
-          if (lastLineParts.length >= 4) {
-            csvDept = lastLineParts[2]?.trim() || '';
-            csvTitle = lastLineParts[3]?.trim() || '';
-          }
-        }
-      } catch (e) {
-        console.warn(`[resolveDepartmentAndAlias] Không thể đọc mẫu CSV ${cleanClass}:`, e.message);
+    try {
+      const classRes = await pool.query('SELECT department_id FROM classes WHERE name = $1 LIMIT 1', [cleanClass]);
+      if (classRes.rows.length > 0 && classRes.rows[0].department_id) {
+        dbDeptId = classRes.rows[0].department_id;
       }
+    } catch (err) {
+      console.warn('[resolveDepartmentAndAlias] DB class lookup error:', err.message);
     }
   }
 
-  // 2. Xác định Chức Vụ (Title)
-  let resolvedTitle = (inputTitle || '').trim();
-  if (!resolvedTitle) {
-    if (cleanClass.toUpperCase() === 'GLV' || normalizedClass === 'GLV') {
-      resolvedTitle = 'Giáo Lý Viên';
-    } else if (cleanClass.toUpperCase() === 'DMHCCC' || normalizedClass === 'DMHCCC') {
-      resolvedTitle = 'Hội Viên';
-    } else {
-      resolvedTitle = csvTitle || 'Học Sinh';
+  // 2. Phân loại Chức vụ (Title)
+  let resolvedTitle = 'Học Sinh';
+  if (inputTitle && inputTitle.trim()) {
+    resolvedTitle = inputTitle.trim();
+  } else if (normalizedClass === 'GLV' || normalizedClass.includes('GLV')) {
+    resolvedTitle = 'Giáo Lý Viên';
+  } else if (normalizedClass.includes('DMHCCC') || normalizedClass.includes('LEGIO') || normalizedClass.includes('LM')) {
+    resolvedTitle = 'Hội Viên';
+  } else if (normalizedClass.includes('GIOITRE') || normalizedClass.includes('GT')) {
+    resolvedTitle = 'Thành Viên';
+  }
+
+  // 3. Phân loại Phòng ban (Department)
+  let targetDeptID = inputDeptID ? String(inputDeptID) : (dbDeptId ? String(dbDeptId) : '');
+  let departmentName = 'Thiếu Nhi';
+
+  if (!targetDeptID || targetDeptID === '0') {
+    const norm = cleanClass.toLowerCase();
+    if (norm.includes('glv') || norm.includes('giao ly') || norm.includes('thiếu nhi') || norm.includes('themsuc') || norm.includes('baodong') || norm.includes('khaitam') || norm.includes('xungtoi') || norm.includes('vaodoi')) {
+      targetDeptID = '990653';
+      departmentName = 'Thiếu Nhi';
+    } else if (norm.includes('dmhccc') || norm.includes('legio') || norm.includes('mariae') || norm.startsWith('lm')) {
+      targetDeptID = '990730';
+      departmentName = 'Legiô Mariae';
+    } else if (norm.includes('gioitre') || norm.includes('giới trẻ') || norm.startsWith('gt')) {
+      targetDeptID = '990731';
+      departmentName = 'Giới Trẻ';
     }
   }
 
-  // 3. Xác định Phòng Ban (Department)
-  let departmentName = csvDept || 'Thiếu Nhi';
-  let targetDeptID = String(inputDeptID || '').trim();
-
-  // Quy chuẩn: Cả Giáo Lý Viên (GLV) và Học Sinh đều thuộc CHUNG phòng ban 'Thiếu Nhi' (ID: 990653)
-  if (normalizedClass === 'GLV' || /^(themsuc|xungtoi|baodong|khaitam|vaodoi)/i.test(normalizedClass)) {
-    departmentName = 'Thiếu Nhi';
-    targetDeptID = '990653';
-  } else if (normalizedClass === 'DMHCCC' || /mariae/i.test(departmentName)) {
-    departmentName = 'Legiô Mariae';
-    targetDeptID = '990730';
-  } else if (/giới trẻ|gioi tre/i.test(departmentName) || normalizedClass.includes('GIOITRE')) {
-    departmentName = 'Giới Trẻ';
-    targetDeptID = '990731';
-  } else if (STATIC_DEPT_MAP[departmentName.toLowerCase()]) {
+  // Nếu vẫn chưa có ID, tra cứu theo map tĩnh
+  if (!targetDeptID && STATIC_DEPT_MAP[departmentName.toLowerCase()]) {
     targetDeptID = STATIC_DEPT_MAP[departmentName.toLowerCase()];
   }
 
-  // Dynamic matching từ hanetService.getDepartmentList() nếu chưa có targetDeptID
-  if (!targetDeptID || targetDeptID === '0') {
+  // Tra cứu động danh sách phòng ban từ HANET nếu chưa tìm thấy
+  if (!targetDeptID) {
     try {
-      const deptRes = await hanetService.getDepartmentList();
-      const hits = deptRes?.data?.hits || [];
-      const matchedDept = hits.find(d => 
-        (d.name || '').trim().toLowerCase() === departmentName.toLowerCase() ||
-        (d.title || '').trim().toLowerCase() === departmentName.toLowerCase()
-      );
-      if (matchedDept && matchedDept.id) {
-        targetDeptID = String(matchedDept.id);
+      const deptListRes = await hanetService.getDepartmentList(1, 100);
+      const hits = deptListRes?.data?.hits || (Array.isArray(deptListRes?.data) ? deptListRes.data : []);
+      for (const d of hits) {
+        const dName = (d.name || d.department_name || '').toLowerCase();
+        if (dName.includes(departmentName.toLowerCase()) || departmentName.toLowerCase().includes(dName)) {
+          targetDeptID = String(d.id || d.department_id);
+          departmentName = d.name || d.department_name;
+          break;
+        }
       }
     } catch (err) {
       console.warn('[resolveDepartmentAndAlias] Dynamic department lookup error:', err.message);
@@ -195,7 +191,6 @@ async function resolveDepartmentAndAlias(className, inputTitle = '', inputDeptID
   let finalAliasID = '';
   if (inputAlias && inputAlias.trim()) {
     let custom = inputAlias.trim().toUpperCase().replace(/\s+/g, '_');
-    // Nếu alias cũ chứa số tuần tự dạng _00xx hoặc chứa _ trong tên lớp, chuẩn hoá sang format mới
     const parts = custom.split('_');
     if (parts.length >= 3 && /^00[0-9A-Z]{2}$/i.test(parts[parts.length - 1])) {
       parts[parts.length - 1] = randomSuffix;
@@ -248,105 +243,102 @@ registrationQueue.on('failed', async (job, err) => {
   const isUnrecoverable = err && (err.name === 'UnrecoverableError' || err.isUnrecoverable);
   const isMaxAttempts = job.attemptsMade >= job.opts.attempts;
 
-  if (isMaxAttempts || isUnrecoverable) {
-    console.error(`[DLQ ROUTE] Job ${job.id} (${job.name}) thất bại (attempts: ${job.attemptsMade}/${job.opts.attempts}, unrecoverable: ${isUnrecoverable}). Đang chuyển sang DLQ. Lý do: ${err.message}`);
+  if (isUnrecoverable || isMaxAttempts) {
+    console.error(`🚨 [DLQ Trigger] Job ${job.id} (${job.name}) thất bại vĩnh viễn sau ${job.attemptsMade} lần thử. Chuyển vào DLQ.`);
+
     try {
-      await deadLetterQueue.add({
+      await deadLetterQueue.add('dead_letter_job', {
         originalJobId: job.id,
         jobName: job.name,
         jobData: job.data,
         failedReason: err.message,
-        errorCode: err.code || null,
-        stacktrace: job.stacktrace || (err.stack ? [err.stack] : []),
+        failedCode: err.code || null,
+        isUnrecoverable: !!isUnrecoverable,
         attemptsMade: job.attemptsMade,
         failedAt: new Date().toISOString()
+      }, {
+        removeOnComplete: false,
+        removeOnFail: false
       });
-      console.log(`[DLQ ROUTE] ✅ Đã lưu job ${job.id} vào Dead Letter Queue (hanet-registration-dlq).`);
+      console.log(`✅ [DLQ Stored] Đã lưu trữ Job ${job.id} vào deadLetterQueue thành công.`);
+
+      // Cập nhật trạng thái FAILED trong PostgreSQL persons
+      if (job.data?.aliasID || job.data?.personID) {
+        await pool.query(
+          `UPDATE persons
+           SET sync_status = 'FAILED', updated_at = CURRENT_TIMESTAMP
+           WHERE alias_id = $1 OR person_id = $2`,
+          [job.data?.aliasID || null, job.data?.personID || null]
+        ).catch(() => {});
+      }
     } catch (dlqErr) {
-      console.error('[DLQ ROUTE ERROR] Không thể đẩy job vào Dead Letter Queue:', dlqErr.message);
+      console.error(`❌ [DLQ Storage Error] Không thể lưu Job ${job.id} vào DLQ:`, dlqErr.message);
     }
   }
 });
 
 /**
- * Trích xuất personID linh hoạt từ phản hồi lỗi hoặc dữ liệu của HANET Cloud
+ * Trích xuất personID từ response hoặc error object của HANET
  */
-function extractPersonIDFromHanet(resOrErr) {
-  if (!resOrErr) return null;
-  if (typeof resOrErr === 'string' && /^[0-9]+$/.test(resOrErr.trim())) return resOrErr.trim();
-  if (resOrErr.personID) return String(resOrErr.personID).trim();
-  if (resOrErr.id) return String(resOrErr.id).trim();
-
-  // Kiểm tra thuộc tính data
-  if (resOrErr.data) {
-    if (typeof resOrErr.data === 'string' && /^[0-9]+$/.test(resOrErr.data.trim())) return resOrErr.data.trim();
-    if (resOrErr.data.personID) return String(resOrErr.data.personID).trim();
-    if (resOrErr.data.id) return String(resOrErr.data.id).trim();
-  }
-
-  // Kiểm tra response từ axios error
-  if (resOrErr.response?.data) {
-    const d = resOrErr.response.data;
-    if (typeof d === 'string' && /^[0-9]+$/.test(d.trim())) return d.trim();
-    if (d.personID) return String(d.personID).trim();
-    if (d.id) return String(d.id).trim();
-    if (d.data) {
-      if (typeof d.data === 'string' && /^[0-9]+$/.test(d.data.trim())) return d.data.trim();
-      if (d.data.personID) return String(d.data.personID).trim();
-      if (d.data.id) return String(d.data.id).trim();
-    }
-  }
-
-  return null;
+function extractPersonIDFromHanet(errorOrRes) {
+  if (!errorOrRes) return null;
+  const resData = errorOrRes.response?.data || errorOrRes.data || errorOrRes;
+  return resData?.personID || resData?.personId || resData?.id || resData?.data?.personID || resData?.data?.id || null;
 }
 
 /**
- * Xử lý luồng Fallback khi gặp lỗi -9007 (Khuôn mặt đã tồn tại)
+ * Xử lý Fallback khi khuôn mặt đã tồn tại trên Cloud (Mã lỗi -9007)
  */
-async function handleFaceExistsFallback({
-  extractedPersonID,
-  name,
-  finalTitle,
-  finalAlias,
-  finalDeptID,
-  resolvedDepartmentName,
-  faceUrl,
-  publicImageUrl,
-  finalAvatarUrl,
-  targetClass
-}) {
+async function handleFaceExistsFallback(params) {
+  const {
+    extractedPersonID,
+    name,
+    finalTitle,
+    finalAlias,
+    finalDeptID,
+    resolvedDepartmentName,
+    faceUrl,
+    publicImageUrl,
+    finalAvatarUrl,
+    targetClass
+  } = params;
+
   let personId = extractedPersonID;
 
-  // Nếu chưa có personID, thử tra cứu lại qua AliasID trên HANET Cloud
-  if (!personId && finalAlias) {
+  // 1. Nếu chưa có personID, tìm kiếm theo Tên và Alias trên Cloud
+  if (!personId) {
     try {
-      const aliasRes = await hanetService.getPersonByAliasID(finalAlias);
-      personId = extractPersonIDFromHanet(aliasRes);
-    } catch (e) {
-      console.warn(`[QueueService] Tra cứu personID qua AliasID ${finalAlias} không thành công:`, e.message);
+      const listRes = await hanetService.getListByPlace();
+      const allPersons = listRes?.data || [];
+      const match = allPersons.find(p =>
+        (p.aliasID && p.aliasID === finalAlias) ||
+        (p.name && p.name.trim().toLowerCase() === name.trim().toLowerCase())
+      );
+      if (match) {
+        personId = match.personID || match.id;
+        console.log(`[QueueService] Đã tìm thấy nhân sự trùng khớp: ${name} -> personID: ${personId}`);
+      }
+    } catch (findErr) {
+      console.warn(`[QueueService] Tra cứu nhân sự trùng lặp lỗi:`, findErr.message);
     }
   }
 
-  console.log('[QueueService] Phát hiện mã -9007, chuyển hướng cập nhật thông tin cho personID:', personId || 'Không xác định');
-
-  const targetFaceUrl = faceUrl || publicImageUrl;
-
-  // 1. Cập nhật ảnh khuôn mặt mới (Face ID)
-  if (targetFaceUrl && personId) {
+  // 2. Cập nhật ảnh đại diện khuôn mặt mới
+  const targetFaceUrl = faceUrl || publicImageUrl || finalAvatarUrl;
+  if (personId && targetFaceUrl) {
     try {
-      await hanetService.updateByFaceUrl({
+      const updateFaceRes = await hanetService.updateByFaceUrl({
         personID: personId,
-        faceUrl: targetFaceUrl,
-        aliasID: finalAlias
+        faceUrl: targetFaceUrl
       });
-      console.log(`[QueueService] ✅ Đã cập nhật ảnh Face ID mới cho personID: ${personId}`);
+      console.log(`[QueueService] Cập nhật Face URL cho personID ${personId}: returnCode=${updateFaceRes.returnCode}`);
     } catch (faceErr) {
       const errCode = faceErr.response?.data?.returnCode;
-      console.warn(`[QueueService] Cập nhật Face ID thất bại:`, getErrorMessage(errCode, faceErr.message));
+      console.warn(`[QueueService] Cập nhật Face URL thất bại:`, getErrorMessage(errCode, faceErr.message));
     }
   }
 
-  // 2. Cập nhật thông tin cá nhân với payload chuẩn hóa
+  // 3. Cập nhật thông tin cơ bản
   if (personId) {
     try {
       await hanetService.updateInfo({
@@ -363,7 +355,7 @@ async function handleFaceExistsFallback({
     }
   }
 
-  // 3. Khóa phòng ban chuẩn
+  // 4. Khóa phòng ban chuẩn
   if (finalDeptID && personId) {
     try {
       await hanetService.addPersonsToDepartment(finalDeptID, personId);
@@ -373,12 +365,29 @@ async function handleFaceExistsFallback({
     }
   }
 
-  // 4. Ghi ngược thông tin đăng ký vào file CSV
-  if (targetClass && personId) {
+  // 5. Cập nhật vào cơ sở dữ liệu PostgreSQL
+  if (personId || finalAlias) {
     try {
-      await csvService.writeBackRegistration(targetClass, name, targetFaceUrl || finalAvatarUrl, personId, finalTitle);
-    } catch (csvErr) {
-      console.warn(`[QueueService] Ghi ngược CSV thất bại:`, csvErr.message);
+      await pool.query(
+        `UPDATE persons
+         SET person_id = COALESCE($1, person_id),
+             face_url = COALESCE($2, face_url),
+             sync_status = 'SYNCED',
+             title = COALESCE($3, title),
+             department_id = COALESCE($4, department_id),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE alias_id = $5 OR person_id = $1`,
+        [
+          String(personId),
+          targetFaceUrl || finalAvatarUrl || null,
+          finalTitle || null,
+          finalDeptID || null,
+          finalAlias
+        ]
+      );
+      console.log(`[QueueService] ✅ Đã đồng bộ vào PostgreSQL persons cho personID: ${personId} (Alias: ${finalAlias})`);
+    } catch (dbErr) {
+      console.warn(`[QueueService] Cập nhật Database thất bại:`, dbErr.message);
     }
   }
 
@@ -468,9 +477,30 @@ registrationQueue.process('register_person_job', 2, async (job) => {
           }
         }
 
-        // Tự động ghi ngược thông tin đăng ký vào file CSV
-        if (targetClass && finalPersonID) {
-          await csvService.writeBackRegistration(targetClass, name, finalAvatarUrl, finalPersonID, finalTitle);
+        // Tự động cập nhật trạng thái SYNCED vào PostgreSQL
+        if (finalPersonID || finalAlias) {
+          try {
+            await pool.query(
+              `UPDATE persons
+               SET person_id = COALESCE($1, person_id),
+                   face_url = COALESCE($2, face_url),
+                   sync_status = 'SYNCED',
+                   title = COALESCE($3, title),
+                   department_id = COALESCE($4, department_id),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE alias_id = $5 OR person_id = $1`,
+              [
+                String(finalPersonID),
+                finalAvatarUrl || faceUrl || null,
+                finalTitle || null,
+                finalDeptID || null,
+                finalAlias
+              ]
+            );
+            console.log(`[Queue register_person_job] ✅ Đã cập nhật PostgreSQL persons cho personID: ${finalPersonID} (Alias: ${finalAlias})`);
+          } catch (dbErr) {
+            console.warn(`[Queue register_person_job] Cập nhật Database thất bại:`, dbErr.message);
+          }
         }
 
         // Đánh dấu hoàn tất trong Redis 24h
@@ -513,7 +543,6 @@ registrationQueue.process('register_person_job', 2, async (job) => {
         throw new Error(`[Mã lỗi ${registerRes?.returnCode}]: ${errorMsg}`);
       }
     } catch (apiErr) {
-      // Nếu đã là UnrecoverableError thì rethrow trực tiếp
       if (apiErr instanceof UnrecoverableError || apiErr.name === 'UnrecoverableError') {
         throw apiErr;
       }
@@ -521,7 +550,7 @@ registrationQueue.process('register_person_job', 2, async (job) => {
       const errData = apiErr.response?.data;
       const code = Number(errData?.returnCode || apiErr.code);
 
-      // 4. Xử lý lỗi -9007 qua Catch block
+      // Xử lý lỗi -9007 qua Catch block
       if (code === -9007 || (errData && errData.returnCode === -9007)) {
         const extractedId = extractPersonIDFromHanet(apiErr) || finalPersonID;
         const fallbackResult = await handleFaceExistsFallback({
@@ -537,24 +566,21 @@ registrationQueue.process('register_person_job', 2, async (job) => {
           targetClass
         });
 
-        // Đánh dấu hoàn tất trong Redis 24h
         await idempotencyService.markCompleted(lockKey, 86400);
-
         return fallbackResult;
-      } else {
-        const errorMsg = getErrorMessage(code, apiErr.message);
-        console.error(`[Queue register_person_job] Lỗi khi xử lý: ${errorMsg}`);
-
-        if (PERMANENT_ERROR_CODES.has(code)) {
-          console.error(`[Queue register_person_job] ❌ Lỗi vĩnh viễn không thể retry (Mã ${code}): ${errorMsg}`);
-          job.discard(); // Hủy retry trong Bull
-          throw new UnrecoverableError(errorMsg, code);
-        }
-
-        // Lỗi tạm thời -> giải phóng lock để Bull Queue retry
-        await idempotencyService.releaseLock(lockKey);
-        throw apiErr;
       }
+
+      const errorMsg = getErrorMessage(code, apiErr.message);
+
+      if (PERMANENT_ERROR_CODES.has(code)) {
+        console.error(`[Queue register_person_job] ❌ Lỗi vĩnh viễn trong catch block (Mã ${code}): ${errorMsg}`);
+        job.discard();
+        throw new UnrecoverableError(errorMsg, code);
+      }
+
+      // Lỗi tạm thời -> giải phóng lock để Bull Queue retry
+      await idempotencyService.releaseLock(lockKey);
+      throw apiErr;
     }
 
   } finally {
@@ -587,7 +613,7 @@ registrationQueue.process('update_person_job', 3, async (job) => {
 
   try {
     try {
-      // 2. Cập nhật thông tin cơ bản
+      // 2. Cập nhật thông tin cơ bản trên HANET Cloud
       const infoResult = await hanetService.updateInfo({
         personID,
         name,
@@ -608,7 +634,7 @@ registrationQueue.process('update_person_job', 3, async (job) => {
         throw new Error(`[Mã lỗi ${infoResult.returnCode}]: ${errorMsg}`);
       }
 
-      // Gán phòng ban để khóa liên kết phòng ban 100% trên HANET Cloud
+      // Gán phòng ban để khóa liên kết phòng ban trên HANET Cloud
       if (departmentID && String(departmentID) !== '0') {
         try {
           await hanetService.addPersonsToDepartment(departmentID, personID);
@@ -639,6 +665,30 @@ registrationQueue.process('update_person_job', 3, async (job) => {
           await idempotencyService.releaseLock(lockKey);
           throw new Error(`[Mã lỗi ${faceResult.returnCode}]: ${errorMsg}`);
         }
+      }
+
+      // 4. Đồng bộ cập nhật vào PostgreSQL
+      try {
+        await pool.query(
+          `UPDATE persons
+           SET name = COALESCE($1, name),
+               title = COALESCE($2, title),
+               face_url = COALESCE($3, face_url),
+               department_id = COALESCE($4, department_id),
+               sync_status = 'SYNCED',
+               updated_at = CURRENT_TIMESTAMP
+           WHERE alias_id = $5 OR person_id = $6`,
+          [
+            name || null,
+            title || null,
+            faceUrl || null,
+            departmentID || null,
+            aliasID || null,
+            String(personID)
+          ]
+        );
+      } catch (dbErr) {
+        console.warn(`[Queue update_person_job] Cập nhật DB thất bại:`, dbErr.message);
       }
 
       // Đánh dấu hoàn tất trong Redis 24h
