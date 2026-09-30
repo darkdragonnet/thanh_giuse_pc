@@ -13,11 +13,11 @@
 <body class="bg-light">
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
     <div class="container">
-      <a class="navbar-brand fw-bold text-primary" href="/"><i class="bi bi-camera-reels-fill me-2"></i>HANET Cloud-First</a>
+      <a class="navbar-brand fw-bold text-primary" href="/links"><i class="bi bi-camera-reels-fill me-2"></i>HANET Cloud-First</a>
       <div class="collapse navbar-collapse">
         <ul class="navbar-nav ms-auto">
-          <li class="nav-item"><a class="nav-link <%= currentPath==='/'?'active':'' %>" href="/">Nhân sự Cloud</a></li>
           <li class="nav-item"><a class="nav-link <%= currentPath==='/links'?'active':'' %>" href="/links">Link Đăng Ký Theo Lớp</a></li>
+          <li class="nav-item"><a class="nav-link <%= currentPath==='/admin/person/list' || currentPath==='/'?'active':'' %>" href="/admin/person/list">Quản Trị Nhân Sự</a></li>
           <li class="nav-item"><a class="nav-link <%= currentPath==='/checkin'?'active':'' %>" href="/checkin">Check-in Real-time</a></li>
         </ul>
       </div>

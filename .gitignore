@@ -5,3 +5,13 @@ uploads/*
 uploads/temp/*
 !uploads/temp/.gitkeep
 .DS_Store
+
+# Dữ liệu cục bộ & cơ sở dữ liệu
+data/
+uploads/
+*.csv
+*.sqlite
+*.sql.dump
+*.dump
+.env
+nodemon.json

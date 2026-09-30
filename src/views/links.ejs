@@ -1,5 +1,5 @@
 <div class="container py-4" style="max-width: 860px;">
-  <!-- Header Tinh Gọn (Không có nút đăng ký tự do) -->
+  <!-- Header Tinh Gọn -->
   <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
     <div>
       <h4 class="fw-bold mb-1 text-dark d-flex align-items-center">
@@ -9,11 +9,11 @@
         Danh Sách Link Đăng Ký Theo Lớp
       </h4>
       <div class="text-muted small">
-        Tổng số: <span class="badge bg-light text-dark border fw-semibold"><%= (links || []).length %></span> lớp | Chỉ đăng ký qua link chỉ định
+        Tổng số: <span class="badge bg-light text-dark border fw-semibold"><%= (links || []).length %></span> lớp | Đăng ký trực tiếp theo từng danh mục
       </div>
     </div>
-    <a href="/" class="btn btn-outline-secondary btn-sm rounded-pill px-3 shadow-xs">
-      <i class="bi bi-people me-1"></i> Quản Lý Nhân Sự
+    <a href="/admin/person/list" class="btn btn-outline-secondary btn-sm rounded-pill px-3 shadow-xs">
+      <i class="bi bi-shield-lock me-1"></i> Quản Lý Nhân Sự
     </a>
   </div>
 
@@ -22,7 +22,7 @@
     <div class="card-body p-2">
       <div class="input-group input-group-sm">
         <span class="input-group-text bg-white border-0 text-muted"><i class="bi bi-search"></i></span>
-        <input type="text" id="searchClass" class="form-control border-0 shadow-none" placeholder="Tìm kiếm nhanh theo tên lớp (VD: BaoDong, ThemSuc, GLV, DMHCCC)...">
+        <input type="text" id="searchClass" class="form-control border-0 shadow-none" placeholder="Tìm kiếm nhanh theo tên lớp (VD: BaoDong, ThemSuc, GLV, DMHCCC)..." autocomplete="off">
       </div>
     </div>
   </div>
@@ -58,30 +58,28 @@
                   <%= index + 1 %>
                 </td>
 
-                <!-- Cột 2 & 3 GỘP THÀNH 1 CỘT: Tên Lớp & Link Thụt Lề -->
+                <!-- Cột 2: Tên Lớp & Link Thụt Lề -->
                 <td class="py-3">
-                  <!-- Hàng 1: Thêm chữ "Lớp" và tên nhóm -->
                   <div class="fw-bold text-dark fs-6 d-flex align-items-center mb-1">
                     <i class="bi bi-mortarboard-fill text-primary me-2"></i>
                     <span>Lớp <%= cleanClassName %></span>
                   </div>
 
-                  <!-- Hàng 2: Link đăng ký có tab index thụt lùi đầu dòng -->
                   <div class="ps-4 ms-2">
                     <span class="text-muted small me-1">Link:</span>
-                    <a href="<%= item.url %>" target="_blank" class="text-decoration-none font-monospace small text-primary text-break">
+                    <a href="<%= item.url %>" target="_blank" rel="noopener noreferrer" class="text-decoration-none font-monospace small text-primary text-break">
                       <%= item.url %>
                     </a>
                   </div>
                 </td>
 
-                <!-- Cột Thao Tác Bên Phải -->
+                <!-- Cột 3: Thao Tác Bên Phải -->
                 <td class="text-end py-3 pe-4">
                   <div class="d-inline-flex gap-2">
                     <button type="button" class="btn btn-sm btn-outline-primary rounded-pill px-3 shadow-xs btn-copy-link" data-url="<%= item.url %>" data-classname="Lớp <%= cleanClassName %>">
                       <i class="bi bi-clipboard me-1"></i> Copy
                     </button>
-                    <a href="<%= item.url %>" target="_blank" class="btn btn-sm btn-light border rounded-pill px-3 shadow-xs" title="Mở trang đăng ký">
+                    <a href="<%= item.url %>" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-light border rounded-pill px-3 shadow-xs" title="Mở trang đăng ký">
                       <i class="bi bi-box-arrow-up-right"></i> Mở
                     </a>
                   </div>
@@ -109,7 +107,7 @@
     const noResult = document.getElementById('noLinkResult');
 
     if (searchInput) {
-      searchInput.addEventListener('input', function() {
+      searchInput.addEventListener('input', function () {
         const keyword = this.value.trim().toLowerCase();
         let matchCount = 0;
 
@@ -129,20 +127,27 @@
       });
     }
 
-    // 2. Xử lý nút Copy Link
+    // 2. Xử lý nút Copy Link (Chỉ thay đổi trạng thái UI, không reload trang)
     document.querySelectorAll('.btn-copy-link').forEach(btn => {
-      btn.addEventListener('click', function() {
-        const url = this.dataset.url;
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const copyBtn = this;
+        const url = copyBtn.dataset.url;
+        if (!url) return;
+
         navigator.clipboard.writeText(url).then(() => {
-          const originalContent = this.innerHTML;
-          this.className = 'btn btn-sm btn-success rounded-pill px-3 shadow-xs';
-          this.innerHTML = '<i class="bi bi-check2 me-1"></i> Đã Chép!';
+          const originalHtml = copyBtn.innerHTML;
+          copyBtn.className = 'btn btn-sm btn-success rounded-pill px-3 shadow-xs';
+          copyBtn.innerHTML = '<i class="bi bi-check2 me-1"></i> Đã Chép!';
+          
           setTimeout(() => {
-            this.className = 'btn btn-sm btn-outline-primary rounded-pill px-3 shadow-xs';
-            this.innerHTML = originalContent;
+            copyBtn.className = 'btn btn-sm btn-outline-primary rounded-pill px-3 shadow-xs';
+            copyBtn.innerHTML = originalHtml;
           }, 1500);
         }).catch(err => {
-          console.error('Không thể copy:', err);
+          console.error('[Copy Error]', err);
         });
       });
     });

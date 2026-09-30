@@ -1,31 +1,30 @@
-const fs = require('fs');
 const path = require('path');
 const hanetService = require('../services/hanetService');
 const imageService = require('../services/imageService');
 const queueService = require('../services/queueService');
 const csvService = require('../services/csvService');
+const { pool } = require('../config/database');
 const { getErrorMessage } = require('../utils/hanetErrorMap');
 
-// [READ] Danh sách Nhân sự từ Cloud
+// [READ] Danh sách Nhân sự từ Cloud và Database
 exports.listPersons = async (req, res, next) => {
   try {
-    const [personRes, deptRes] = await Promise.all([
+    const [personRes, dbDeptRes] = await Promise.all([
       hanetService.getListByPlace(),
-      hanetService.getDepartmentList(1, 100).catch(() => ({ data: [] }))
+      pool.query('SELECT id, name FROM departments ORDER BY id ASC')
     ]);
+
     const persons = personRes?.data || [];
-    const depts = deptRes?.data?.hits || (Array.isArray(deptRes?.data) ? deptRes.data : []);
     const deptMap = {
       '990653': 'Thiếu Nhi',
       '990730': 'Legiô Mariae',
-      '990731': 'Giới Trẻ',
-      '990735': 'Gia Trưởng',
-      '990736': 'Hiền Mẫu'
+      '990731': 'Giới Trẻ'
     };
-    depts.forEach(d => {
-      const id = d.id || d.department_id;
-      const name = d.name || d.department_name;
-      if (id && name) deptMap[String(id)] = name;
+
+    (dbDeptRes.rows || []).forEach(d => {
+      if (d.id && d.name) {
+        deptMap[String(d.id)] = d.name;
+      }
     });
 
     res.render('person/list', {
@@ -42,46 +41,17 @@ exports.listPersons = async (req, res, next) => {
   }
 };
 
-// [READ] Danh Sách Link Đăng Ký theo Danh Mục CSV
-exports.viewLinks = (req, res) => {
+// [READ] Danh Sách Link Đăng Ký từ Bảng classes (PostgreSQL)
+exports.viewLinks = async (req, res) => {
   try {
-    const dataDir = path.join(__dirname, '../../data');
-    const targetDir = fs.existsSync(dataDir) ? dataDir : path.join(process.cwd(), 'data');
+    const result = await pool.query('SELECT name FROM classes ORDER BY name ASC');
+    const baseUrl = (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
 
-    let links = [];
-    if (fs.existsSync(targetDir)) {
-      // Danh sách đen các tên file rác cần loại bỏ tuyệt đối
-      const blacklist = ['mariae.csv', 'nhi.csv', 'thiếu.csv', 'lêgiô.csv', 'thieu.csv', 'legio.csv'];
-
-      const files = fs.readdirSync(targetDir)
-        .filter(f => {
-          // 1. Phải là file đuôi .csv
-          if (!f.toLowerCase().endsWith('.csv')) return false;
-
-          // 2. Bỏ qua các file backup
-          if (f.toLowerCase().includes('.bak')) return false;
-
-          // 3. Bỏ qua file ẩn hệ thống (macOS ._ hoặc Linux .)
-          if (f.startsWith('.') || f.startsWith('._')) return false;
-
-          // 4. Bỏ qua các file trong danh sách đen
-          if (blacklist.includes(f.toLowerCase())) return false;
-
-          return true;
-        })
-        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
-
-      const baseUrl = (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
-
-      links = files.map(file => {
-        const slug = file.replace(/\.csv$/i, '');
-        return {
-          fileName: file,
-          name: slug,
-          url: `${baseUrl}/register/${encodeURIComponent(slug)}`
-        };
-      });
-    }
+    const links = result.rows.map(row => ({
+      fileName: row.name,
+      name: row.name,
+      url: `${baseUrl}/register/${encodeURIComponent(row.name)}`
+    }));
 
     res.render('links', {
       links,
@@ -92,77 +62,95 @@ exports.viewLinks = (req, res) => {
     res.render('links', {
       links: [],
       title: 'Danh Sách Link Đăng Ký Theo Lớp',
-      error: 'Không thể tải danh sách link.'
+      error: 'Không thể tải danh sách link từ cơ sở dữ liệu.'
     });
   }
 };
 
-// [CREATE] Render Form Đăng ký
+// [CREATE] Render Form Đăng ký chung
 exports.renderRegisterForm = async (req, res) => {
   try {
-    const deptRes = await hanetService.getDepartmentList();
-    const departments = deptRes?.data?.hits || [];
+    const [deptRes, dbClassesRes] = await Promise.all([
+      pool.query('SELECT id, name FROM departments ORDER BY name ASC'),
+      pool.query('SELECT name FROM classes ORDER BY name ASC')
+    ]);
+
     res.render('person/register', {
       title: 'Đăng ký Face ID Nhân sự',
-      departments
+      departments: deptRes.rows || [],
+      classes: dbClassesRes.rows || []
     });
   } catch (err) {
     console.error('[renderRegisterForm Error]', err.message);
     res.render('person/register', {
       title: 'Đăng ký Face ID Nhân sự',
-      departments: []
+      departments: [],
+      classes: []
     });
   }
 };
 
-// [CREATE - CSV] Render Form Đăng ký theo danh mục CSV
-/**
- * Render form đăng ký Face ID tối ưu Zalo theo file CSV danh mục
- * Endpoint: GET /register/:file_name
- */
+// [CREATE - POSTGRESQL] Render Form Đăng ký theo lớp từ bảng persons
 exports.viewRegisterByFile = async (req, res) => {
-  const fileName = req.params.file_name;
+  const fileName = req.params.file_name || req.params.classId;
   try {
-    const csvList = await csvService.readList(fileName);
-    
-    // Fail-soft: nếu file rỗng hoặc không tồn tại vẫn render, cảnh báo nhẹ qua flash
-    if (!csvList || csvList.length === 0) {
-      req.flash('warning', `Danh sách "${fileName}" hiện chưa có dữ liệu hoặc file không tồn tại.`);
+    const result = await pool.query(
+      `SELECT p.*, d.name AS department_name
+       FROM persons p
+       LEFT JOIN departments d ON p.department_id = d.id
+       WHERE ($1::text IS NULL OR p.class_name = $1)
+       ORDER BY p.id ASC`,
+      [fileName]
+    );
+
+    const csvList = result.rows.map(row => ({
+      ho_ten: row.name,
+      lop: row.class_name,
+      phong_ban: row.department_name || 'Thiếu Nhi',
+      chuc_vu: row.title || 'Học Sinh',
+      anh_url: row.face_url || '',
+      hanet_person_id: row.person_id || '',
+      alias_id: row.alias_id || ''
+    }));
+
+    if (csvList.length === 0) {
+      req.flash('warning', `Lớp "${fileName}" hiện chưa có dữ liệu trong Database.`);
     }
 
     res.render('person/register_csv', {
       fileName,
-      csvList: csvList || [],
+      csvList,
       title: `Đăng Ký Face ID - ${fileName}`
     });
   } catch (err) {
     console.error('[viewRegisterByFile Error]', err.message);
     req.flash('error', `Không thể tải danh mục đăng ký: ${err.message}`);
-    res.redirect('/');
+    res.redirect('/links');
   }
 };
 
-// [CREATE] Xử lý Đăng ký Nhân sự mới
+// [CREATE] Xử lý Đăng ký Nhân sự mới (Cloud + PostgreSQL)
 exports.handleRegister = async (req, res, next) => {
   try {
-    const { aliasID, title, departmentID, base64_image, source_csv, departmentName, lop, className, existing_person_id } = req.body;
+    const { aliasID, title, departmentID, base64_image, source_csv, className, lop, existing_person_id } = req.body;
     const name = req.body.personName || req.body.name;
-    const fileName = req.params.file_name || source_csv || req.body.file_name || className || lop;
+    const targetClass = req.params.file_name || source_csv || req.body.file_name || className || lop || null;
 
-    // Validate Họ tên bắt buộc
+    // 1. Validate Họ tên bắt buộc
     if (!name || !name.trim()) {
       req.flash('error', 'Vui lòng nhập Họ và Tên.');
-      return res.redirect(fileName ? `/register/${fileName}` : '/register');
+      return res.redirect(targetClass ? `/register/${targetClass}` : '/register');
     }
 
     const uploadedFile = req.file || (req.files && req.files.length > 0 ? req.files[0] : null);
 
-    // Validate Ảnh bắt buộc
+    // 2. Validate Ảnh bắt buộc
     if (!uploadedFile && !base64_image) {
       req.flash('error', 'Vui lòng chụp hoặc tải ảnh khuôn mặt.');
-      return res.redirect(fileName ? `/register/${fileName}` : '/register');
+      return res.redirect(targetClass ? `/register/${targetClass}` : '/register');
     }
 
+    // 3. Xử lý ảnh khuôn mặt qua Image Service
     const processedImage = await imageService.processFaceImage({
       filePath: uploadedFile ? uploadedFile.path : null,
       base64String: base64_image || null
@@ -171,21 +159,53 @@ exports.handleRegister = async (req, res, next) => {
     const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
     const publicImageUrl = `${baseUrl.replace(/\/$/, '')}/uploads/${processedImage.filename}`;
 
+    // 4. Xác định Department ID từ DB nếu chưa có
+    let finalDeptID = departmentID || null;
+    if (!finalDeptID && targetClass) {
+      const classRow = await pool.query('SELECT department_id FROM classes WHERE name = $1 LIMIT 1', [targetClass]);
+      if (classRow.rows.length > 0 && classRow.rows[0].department_id) {
+        finalDeptID = classRow.rows[0].department_id;
+      }
+    }
+    if (!finalDeptID) finalDeptID = '990653'; // Mặc định Thiếu Nhi
+
+    // 5. Chuẩn hóa Alias ID
+    let finalAlias = (aliasID || '').trim();
+    if (!finalAlias) {
+      const countRes = await pool.query('SELECT count(*) FROM persons WHERE class_name = $1', [targetClass]);
+      const nextIdx = parseInt(countRes.rows[0].count || 0, 10) + 1;
+      finalAlias = `${targetClass || 'CHUNG'}_${nextIdx}`;
+    }
+
+    // 6. Ghi trước vào Database PostgreSQL với trạng thái PENDING
+    await pool.query(
+      `INSERT INTO persons (alias_id, person_id, name, class_name, department_id, title, face_url, sync_status, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', CURRENT_TIMESTAMP)
+       ON CONFLICT (alias_id) DO UPDATE SET
+         name = EXCLUDED.name,
+         face_url = COALESCE(EXCLUDED.face_url, persons.face_url),
+         department_id = COALESCE(EXCLUDED.department_id, persons.department_id),
+         title = EXCLUDED.title,
+         updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [finalAlias, existing_person_id || null, name.trim(), targetClass, finalDeptID, (title || 'Học Sinh').trim(), publicImageUrl]
+    );
+
+    // 7. Đẩy tác vụ vào Bull Queue xử lý với HANET Cloud
     await queueService.enqueueRegisterPerson({
       name: name.trim(),
-      aliasID: aliasID ? aliasID.trim() : '',
-      title: title ? title.trim() : 'Nhân viên',
-      departmentID: departmentID || null,
+      aliasID: finalAlias,
+      title: title ? title.trim() : 'Học Sinh',
+      departmentID: finalDeptID,
       imagePath: processedImage.processedPath,
       imageFilename: processedImage.filename,
       publicImageUrl,
-      source_csv: fileName || null,
+      source_csv: targetClass,
       existing_person_id: existing_person_id || null
     });
 
-    const deptMsg = departmentID ? ' và gán vào phòng ban đã chọn' : '';
-    req.flash('success', `Đã nhận yêu cầu đăng ký cho "${name}"${deptMsg}. Tiến trình xử lý đang chạy ngầm.`);
-    res.redirect(fileName ? `/register/${fileName}` : '/');
+    req.flash('success', `Đã tiếp nhận đăng ký cho "${name}". Tiến trình đồng bộ Cloud đang chạy ngầm.`);
+    res.redirect(targetClass ? `/register/${targetClass}` : '/links');
   } catch (err) {
     console.error('[Register Error]', err.message);
     const code = err.response?.data?.returnCode;
@@ -200,19 +220,19 @@ exports.handleRegister = async (req, res, next) => {
 exports.renderEditForm = async (req, res, next) => {
   try {
     const { personID } = req.params;
-    // Đọc song song danh sách nhân sự và danh sách phòng ban từ Cloud
+
     const [personRes, deptRes] = await Promise.all([
       hanetService.getListByPlace(),
-      hanetService.getDepartmentList()
+      pool.query('SELECT id, name FROM departments ORDER BY id ASC')
     ]);
 
     const persons = personRes?.data || [];
-    const departments = deptRes?.data?.hits || [];
+    const departments = deptRes.rows || [];
     const person = persons.find(p => String(p.id || p.personID) === String(personID));
 
     if (!person) {
       req.flash('error', 'Không tìm thấy thông tin nhân sự trên HANET Cloud.');
-      return res.redirect('/');
+      return res.redirect('/admin/person/list');
     }
 
     res.render('person/edit', {
@@ -225,40 +245,25 @@ exports.renderEditForm = async (req, res, next) => {
     const code = err.response?.data?.returnCode;
     const msg = getErrorMessage(code, err.message);
     req.flash('error', `Lỗi truy xuất thông tin nhân sự: ${msg}`);
-    res.redirect('/');
+    res.redirect('/admin/person/list');
   }
 };
 
-// [UPDATE] Xử lý Cập nhật Thông tin / Face ID lên Cloud
+// [UPDATE] Xử lý Cập nhật Thông tin / Face ID lên Cloud và PostgreSQL
 exports.handleUpdate = async (req, res, next) => {
   try {
     const { personID } = req.params;
     const { name, aliasID, title, departmentID, base64_image } = req.body;
 
-    // Validate Họ tên bắt buộc
     if (!name || !name.trim()) {
       req.flash('error', 'Vui lòng nhập Họ và Tên.');
       return res.redirect(`/edit/${personID}`);
     }
 
-    // 1. Lấy thông tin person hiện tại để so sánh department
-    const listRes = await hanetService.getListByPlace();
-    const person = listRes?.data?.find(p => String(p.personID || p.id) === String(personID));
-    const oldDeptID = person?.departmentID && String(person.departmentID) !== '0'
-      ? String(person.departmentID)
-      : null;
-    const newDeptID = departmentID && String(departmentID) !== '0' ? String(departmentID) : null;
-
-    console.log(`[handleUpdate] Person ${personID} | oldDept=${oldDeptID} → newDept=${newDeptID}`);
-
-    // 2. Cập nhật thông tin cơ bản + face nếu có (qua queue)
-    let updatePayload = {
-      personID,
-      name: name.trim(),
-      aliasID: aliasID ? aliasID.trim() : '',
-      title: title ? title.trim() : 'Nhân viên',
-      departmentID: newDeptID || oldDeptID || null
-    };
+    // 1. Cập nhật thông tin trong PostgreSQL
+    let publicImageUrl = null;
+    let imageFilename = null;
+    let imagePath = null;
 
     const uploadedUpdateFile = req.file || (req.files && req.files.length > 0 ? req.files[0] : null);
     if (uploadedUpdateFile || base64_image) {
@@ -266,47 +271,37 @@ exports.handleUpdate = async (req, res, next) => {
         filePath: uploadedUpdateFile ? uploadedUpdateFile.path : null,
         base64String: base64_image || null
       });
-      const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
-      updatePayload.imagePath = processedImage.processedPath;
-      updatePayload.imageFilename = processedImage.filename;
-      updatePayload.publicImageUrl = `${baseUrl.replace(/\/$/, '')}/uploads/${processedImage.filename}`;
-    }
-    await queueService.enqueueUpdatePerson(updatePayload);
-
-    // 3. Xử lý đổi phòng ban (chỉ khi user chọn phòng mới khác phòng cũ)
-    let deptMsg = '';
-    if (newDeptID && newDeptID !== oldDeptID) {
-      // 3a. Gỡ khỏi phòng cũ (nếu đang ở phòng nào đó)
-      if (oldDeptID) {
-        try {
-          const removeRes = await hanetService.removePersonsFromDepartment(oldDeptID, personID);
-          console.log(`[handleUpdate] Remove khỏi phòng ${oldDeptID}: returnCode=${removeRes.returnCode}`);
-        } catch (err) {
-          console.warn(`[handleUpdate] Không gỡ được khỏi phòng cũ ${oldDeptID}:`, err.message);
-        }
-      }
-
-      // 3b. Gán vào phòng mới
-      try {
-        const addRes = await hanetService.addPersonsToDepartment(newDeptID, personID);
-        console.log(`[handleUpdate] Add vào phòng ${newDeptID}: returnCode=${addRes.returnCode}`);
-        if (addRes.returnCode === 1) {
-          deptMsg = ` Đã chuyển sang phòng ban mới.`;
-        } else {
-          const errCode = addRes.returnCode;
-          deptMsg = ` ⚠️ Gán phòng ban lỗi: ${getErrorMessage(errCode, addRes.returnMessage)}`;
-        }
-      } catch (err) {
-        console.error(`[handleUpdate] Lỗi add-person:`, err.message);
-        const code = err.response?.data?.returnCode;
-        deptMsg = ` ⚠️ Lỗi gán phòng ban: ${getErrorMessage(code, err.message)}`;
-      }
-    } else if (newDeptID === oldDeptID && newDeptID) {
-      deptMsg = ' (Không thay đổi phòng ban).';
+      const baseUrl = (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+      publicImageUrl = `${baseUrl}/uploads/${processedImage.filename}`;
+      imageFilename = processedImage.filename;
+      imagePath = processedImage.processedPath;
     }
 
-    req.flash('success', `Đã cập nhật nhân sự "${name}".${deptMsg}`);
-    res.redirect('/');
+    await pool.query(
+      `UPDATE persons
+       SET name = COALESCE($1, name),
+           title = COALESCE($2, title),
+           face_url = COALESCE($3, face_url),
+           department_id = COALESCE($4, department_id),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE alias_id = $5 OR person_id = $5`,
+      [name.trim(), title ? title.trim() : null, publicImageUrl, departmentID || null, String(personID)]
+    );
+
+    // 2. Gửi tác vụ cập nhật vào Bull Queue
+    await queueService.enqueueUpdatePerson({
+      personID,
+      name: name.trim(),
+      aliasID: aliasID ? aliasID.trim() : '',
+      title: title ? title.trim() : 'Học Sinh',
+      departmentID: departmentID || null,
+      imagePath,
+      imageFilename,
+      publicImageUrl
+    });
+
+    req.flash('success', `Đã cập nhật thông tin cho "${name}".`);
+    res.redirect('/admin/person/list');
   } catch (err) {
     console.error('[Update Error]', err.message);
     const code = err.response?.data?.returnCode;
@@ -316,40 +311,40 @@ exports.handleUpdate = async (req, res, next) => {
   }
 };
 
-// [DELETE] Xử lý Xóa Nhân sự trên HANET Cloud & Đồng bộ CSV
+// [DELETE] Xử lý Xóa Nhân sự trên HANET Cloud & PostgreSQL
 exports.handleDelete = async (req, res, next) => {
   const personID = req.params.personID || req.params.id || req.body.personID;
   const personName = req.body.personName || req.body.name || '';
 
   if (!personID) {
     req.flash('error', 'Không tìm thấy ID nhân sự để xóa.');
-    return res.redirect('/');
+    return res.redirect('/admin/person/list');
   }
 
   try {
-    // 1. Gọi API xóa nhân sự trên HANET Cloud
+    // 1. Xóa trong PostgreSQL
+    await pool.query('DELETE FROM persons WHERE alias_id = $1 OR person_id = $1', [String(personID)]);
+
+    // 2. Gọi API xóa nhân sự trên HANET Cloud
     const result = await hanetService.removePerson(personID);
 
-    if (result && result.returnCode === 1) {
-      // 2. Tự động reset Face ID & PersonID trong các file CSV (Đồng bộ 2 chiều)
-      const updatedCsvFiles = csvService.removePersonFromCsv(personID, personName);
-      const csvNote = updatedCsvFiles.length > 0 
-        ? ` và đã đồng bộ xóa trong file danh mục (${updatedCsvFiles.join(', ')})` 
-        : '';
+    // 3. Tự động đồng bộ xóa trong file CSV nếu có (fail-soft)
+    csvService.removePersonFromCsv(personID, personName);
 
-      req.flash('success', `Đã xóa thành công nhân sự [ID: ${personID}] khỏi HANET Cloud${csvNote}.`);
+    if (result && result.returnCode === 1) {
+      req.flash('success', `Đã xóa thành công nhân sự [ID: ${personID}] khỏi hệ thống.`);
     } else {
       const errorMsg = getErrorMessage(result?.returnCode, result?.returnMessage);
-      req.flash('error', `Lỗi từ HANET Cloud: ${errorMsg}`);
+      req.flash('warning', `Đã xóa trong Database cục bộ. Cảnh báo Cloud: ${errorMsg}`);
     }
 
-    res.redirect('/');
+    res.redirect('/admin/person/list');
   } catch (err) {
     console.error('[Delete Error]', err.message);
     const code = err.response?.data?.returnCode;
     const msg = getErrorMessage(code, err.message);
     req.flash('error', `Không thể xóa nhân sự: ${msg}`);
-    res.redirect('/');
+    res.redirect('/admin/person/list');
   }
 };
 
@@ -387,16 +382,42 @@ exports.viewDLQ = async (req, res, next) => {
   }
 };
 
-// [SYNC] Kích hoạt đồng bộ Cloud to CSV
+// [SYNC] Kích hoạt đồng bộ Cloud về PostgreSQL Database
 exports.triggerSync = async (req, res, next) => {
   try {
     const listRes = await hanetService.getListByPlace();
-    const count = listRes?.data?.length || 0;
-    req.flash('success', `Đã kích hoạt đồng bộ dữ liệu. Tổng số nhân sự Cloud: ${count}`);
-    res.redirect('/');
+    const cloudPersons = listRes?.data || [];
+
+    let syncCount = 0;
+    for (const cp of cloudPersons) {
+      const pId = String(cp.personID || cp.id);
+      const name = cp.name;
+      const avatar = cp.avatar || cp.faceUrl || null;
+      const alias = cp.aliasID || null;
+      const deptId = cp.departmentID ? String(cp.departmentID) : null;
+      const title = cp.title || 'Học Sinh';
+
+      if (alias) {
+        await pool.query(
+          `INSERT INTO persons (alias_id, person_id, name, department_id, title, face_url, sync_status, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 'SYNCED', CURRENT_TIMESTAMP)
+           ON CONFLICT (alias_id) DO UPDATE SET
+             person_id = EXCLUDED.person_id,
+             face_url = COALESCE(EXCLUDED.face_url, persons.face_url),
+             sync_status = 'SYNCED',
+             updated_at = CURRENT_TIMESTAMP`,
+          [alias, pId, name, deptId, title, avatar]
+        );
+        syncCount++;
+      }
+    }
+
+    req.flash('success', `Đã đồng bộ thành công ${syncCount}/${cloudPersons.length} nhân sự từ Cloud vào PostgreSQL.`);
+    res.redirect('/admin/person/list');
   } catch (err) {
+    console.error('[triggerSync Error]', err.message);
     req.flash('error', `Lỗi đồng bộ: ${err.message}`);
-    res.redirect('/');
+    res.redirect('/admin/person/list');
   }
 };
 
@@ -406,4 +427,3 @@ exports.showLinks = exports.viewLinks;
 exports.showRegisterForm = exports.viewRegisterByFile;
 exports.update = exports.handleUpdate;
 exports.delete = exports.handleDelete;
-

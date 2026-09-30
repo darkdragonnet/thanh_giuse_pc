@@ -1,21 +1,28 @@
 const hanetService = require('../services/hanetService');
+const { pool } = require('../config/database');
 
-// [READ] Danh sách Phòng ban
+// [READ] Danh sách Phòng ban (Đồng bộ HANET Cloud & PostgreSQL)
 exports.listDepartments = async (req, res) => {
   try {
-    const result = await hanetService.getDepartmentList();
-    const departments = result?.data?.hits || result?.data || [];
+    const [cloudRes, dbRes] = await Promise.all([
+      hanetService.getDepartmentList().catch(() => ({ data: [] })),
+      pool.query('SELECT d.*, count(p.id) as member_count FROM departments d LEFT JOIN persons p ON d.id = p.department_id GROUP BY d.id ORDER BY d.id ASC')
+    ]);
+
+    const departments = cloudRes?.data?.hits || cloudRes?.data || dbRes.rows || [];
 
     res.render('department/index', {
-      title: 'Quản lý Phòng ban - HANET Cloud',
-      departments
+      title: 'Quản lý Phòng ban - HANET Cloud & DB',
+      departments,
+      dbDepartments: dbRes.rows || []
     });
   } catch (err) {
     console.error('[listDepartments Error]', err.message);
     req.flash('error', `Không thể lấy danh sách phòng ban: ${err.message}`);
     res.render('department/index', {
       title: 'Quản lý Phòng ban',
-      departments: []
+      departments: [],
+      dbDepartments: []
     });
   }
 };
@@ -23,16 +30,30 @@ exports.listDepartments = async (req, res) => {
 // [CREATE] Tạo mới Phòng ban
 exports.handleCreate = async (req, res) => {
   try {
-    const { name, desc } = req.body;
+    const { name, desc, code } = req.body;
     if (!name || !name.trim()) {
       req.flash('error', 'Tên phòng ban không được để trống.');
       return res.redirect('/departments');
     }
 
-    const result = await hanetService.createDepartment(name.trim(), desc ? desc.trim() : '');
+    const trimmedName = name.trim();
+    const result = await hanetService.createDepartment(trimmedName, desc ? desc.trim() : '');
 
     if (result.returnCode === 1) {
-      req.flash('success', `Đã tạo thành công phòng ban "${name}".`);
+      const newId = String(result.data?.id || Date.now());
+      const deptCode = (code || trimmedName.slice(0, 4).toUpperCase()).replace(/\s+/g, '');
+
+      // Lưu vào PostgreSQL
+      await pool.query(
+        `INSERT INTO departments (id, name, code)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name,
+           code = EXCLUDED.code`,
+        [newId, trimmedName, deptCode]
+      );
+
+      req.flash('success', `Đã tạo thành công phòng ban "${trimmedName}" (ID: ${newId}).`);
     } else {
       req.flash('error', `Lỗi từ HANET Cloud [${result.returnCode}]: ${result.returnMessage}`);
     }
@@ -49,19 +70,31 @@ exports.handleCreate = async (req, res) => {
 exports.handleUpdate = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, desc } = req.body;
+    const { name, desc, code } = req.body;
 
     if (!name || !name.trim()) {
       req.flash('error', 'Tên phòng ban không được để trống.');
       return res.redirect('/departments');
     }
 
-    const result = await hanetService.updateDepartment(id, name.trim(), desc ? desc.trim() : '');
+    const trimmedName = name.trim();
+
+    // 1. Cập nhật trong PostgreSQL
+    await pool.query(
+      `UPDATE departments
+       SET name = $1,
+           code = COALESCE($2, code)
+       WHERE id = $3`,
+      [trimmedName, code ? code.trim() : null, String(id)]
+    );
+
+    // 2. Cập nhật trên HANET Cloud
+    const result = await hanetService.updateDepartment(id, trimmedName, desc ? desc.trim() : '');
 
     if (result.returnCode === 1) {
       req.flash('success', `Đã cập nhật thành công phòng ban ID "${id}".`);
     } else {
-      req.flash('error', `Lỗi từ HANET Cloud [${result.returnCode}]: ${result.returnMessage}`);
+      req.flash('warning', `Đã cập nhật Database. Cảnh báo Cloud [${result.returnCode}]: ${result.returnMessage}`);
     }
 
     res.redirect('/departments');
@@ -76,12 +109,17 @@ exports.handleUpdate = async (req, res) => {
 exports.handleDelete = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // 1. Xóa trong PostgreSQL (cascade hoặc set null)
+    await pool.query('DELETE FROM departments WHERE id = $1', [String(id)]);
+
+    // 2. Xóa trên HANET Cloud
     const result = await hanetService.removeDepartment(id);
 
     if (result.returnCode === 1) {
       req.flash('success', `Đã xóa thành công phòng ban ID "${id}".`);
     } else {
-      req.flash('error', `Lỗi từ HANET Cloud [${result.returnCode}]: ${result.returnMessage}`);
+      req.flash('warning', `Đã xóa trong Database. Cảnh báo Cloud [${result.returnCode}]: ${result.returnMessage}`);
     }
 
     res.redirect('/departments');
@@ -100,35 +138,37 @@ exports.viewMembers = async (req, res) => {
   let permissionError = false;
   let permissionMessage = '';
 
-  // 1. Lấy tất cả nhân sự (luôn OK)
   try {
-    const allPersonsRes = await hanetService.getListByPlace();
+    // 1. Lấy tất cả nhân sự từ Cloud
+    const allPersonsRes = await hanetService.getListByPlace().catch(() => ({ data: [] }));
     allPersons = allPersonsRes?.data || [];
-  } catch (err) {
-    console.error(`[viewMembers - getListByPlace Error]`, err.message);
-    req.flash('error', `Không thể lấy danh sách nhân sự: ${err.message}`);
-  }
 
-  // 2. Lấy nhân sự thuộc phòng ban (có thể 403)
-  try {
-    const membersRes = await hanetService.getPersonsByDepartment(departmentID);
-    if (membersRes.returnCode === 1) {
-      members = membersRes.data || [];
-    } else {
-      req.flash('error', `Không thể đọc phòng ban ${departmentID}: ${membersRes.returnMessage}`);
+    // 2. Lấy nhân sự từ PostgreSQL thuộc phòng ban này
+    const dbMembersRes = await pool.query(
+      `SELECT * FROM persons WHERE department_id = $1 ORDER BY name ASC`,
+      [String(departmentID)]
+    );
+
+    // 3. Lấy nhân sự từ HANET Cloud
+    try {
+      const membersRes = await hanetService.getPersonsByDepartment(departmentID);
+      if (membersRes.returnCode === 1 && membersRes.data) {
+        members = membersRes.data;
+      } else {
+        members = dbMembersRes.rows || [];
+      }
+    } catch (err) {
+      members = dbMembersRes.rows || [];
+      if (err.response && err.response.status === 403) {
+        permissionError = true;
+        permissionMessage = `Phòng ban ID ${departmentID} không thuộc Place ID ${process.env.HANET_PLACE_ID} của app, hoặc thiếu quyền "department_person:read".`;
+      }
     }
   } catch (err) {
     console.error(`[viewMembers Error - Dept ${departmentID}]`, err.message);
-    if (err.response && err.response.status === 403) {
-      permissionError = true;
-      permissionMessage = `Phòng ban ID ${departmentID} không thuộc Place ID ${process.env.HANET_PLACE_ID} của app, hoặc thiếu quyền "department_person:read". Hãy dùng nút "Fix" để xoá và tạo lại qua API app.`;
-      req.flash('error', `⚠️ Lỗi quyền (403): ${permissionMessage}`);
-    } else {
-      req.flash('error', `Lỗi tải thành viên: ${err.message}`);
-    }
+    req.flash('error', `Lỗi tải danh sách thành viên: ${err.message}`);
   }
 
-  // 3. LUÔN render view
   res.render('department/members', {
     title: `Quản lý Thành viên - Phòng ban ${departmentID}`,
     departmentID,
@@ -150,12 +190,25 @@ exports.handleAddMembers = async (req, res) => {
       return res.redirect(`/departments/${departmentID}/members`);
     }
 
+    const idsArray = Array.isArray(personIDs) ? personIDs : [personIDs];
+
+    // 1. Cập nhật trong PostgreSQL
+    for (const pId of idsArray) {
+      await pool.query(
+        `UPDATE persons
+         SET department_id = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE person_id = $2 OR alias_id = $2`,
+        [String(departmentID), String(pId)]
+      );
+    }
+
+    // 2. Cập nhật trên HANET Cloud
     const result = await hanetService.addPersonsToDepartment(departmentID, personIDs);
 
     if (result.returnCode === 1) {
       req.flash('success', 'Đã thêm thành viên vào phòng ban thành công.');
     } else {
-      req.flash('error', `Lỗi từ HANET Cloud [${result.returnCode}]: ${result.returnMessage}`);
+      req.flash('warning', `Đã cập nhật Database. Cảnh báo Cloud [${result.returnCode}]: ${result.returnMessage}`);
     }
 
     res.redirect(`/departments/${departmentID}/members`);
@@ -185,7 +238,15 @@ exports.handleFix = async (req, res) => {
 
     const createRes = await hanetService.createDepartment(old.name, old.desc || '');
     if (createRes.returnCode === 1) {
-      const newId = createRes.data?.id;
+      const newId = String(createRes.data?.id);
+      await pool.query(
+        `UPDATE departments SET id = $1 WHERE id = $2`,
+        [newId, String(id)]
+      );
+      await pool.query(
+        `UPDATE persons SET department_id = $1 WHERE department_id = $2`,
+        [newId, String(id)]
+      );
       req.flash('success', `Đã fix phòng ban "${old.name}": ID cũ ${id} → ID mới ${newId}`);
     } else {
       req.flash('error', `Xoá OK nhưng tạo lại lỗi: ${createRes.returnMessage}`);
