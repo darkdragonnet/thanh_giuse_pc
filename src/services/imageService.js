@@ -3,23 +3,82 @@ const path = require('path');
 const fs = require('fs');
 
 /**
- * Chuẩn hóa ảnh dùng Sharp bảo đảm kích thước đầu ra đúng 1280 x 738
- * @param {string} inputPath - Đường dẫn ảnh gốc
- * @param {string} outputPath - Đường dẫn ảnh đầu ra
- * @returns {Promise<string>}
+ * Kiểm tra buffer có phải định dạng HEIC/HEIF không qua Magic Bytes
+ * @param {Buffer} buffer
+ * @returns {boolean}
  */
-async function normalizeImage(inputPath, outputPath) {
-  const metadata = await sharp(inputPath).metadata();
-  if (!metadata.format) {
-    throw new Error('INVALID_IMAGE');
+function isHeic(buffer) {
+  if (!buffer || buffer.length < 12) return false;
+
+  const brand = buffer.toString('ascii', 4, 12);
+
+  return brand.includes('ftyp') && (
+    brand.includes('heic') ||
+    brand.includes('heix') ||
+    brand.includes('hevc') ||
+    brand.includes('mif1') ||
+    brand.includes('msf1')
+  );
+}
+
+/**
+ * Giải mã ảnh HEIC/HEIF sang Sharp Instance
+ * @param {Buffer} buffer
+ * @returns {Promise<sharp.Sharp>}
+ */
+async function loadSharpInstance(buffer) {
+  if (isHeic(buffer)) {
+    try {
+      const decode = require('heic-decode');
+      const { data, width, height } = await decode({ buffer });
+
+      return sharp(Buffer.from(data), {
+        raw: {
+          width,
+          height,
+          channels: 4
+        }
+      });
+    } catch (err) {
+      console.warn(
+        '⚠️ [ImageService] heic-decode fallback error:',
+        err.message
+      );
+    }
   }
 
-  // Tự động xoay theo EXIF -> Resize cover 1280x738 -> Xuất JPEG chất lượng cao
-  await sharp(inputPath)
+  return sharp(buffer);
+}
+
+/**
+ * Chuẩn hóa ảnh thành 1280 x 738.
+ * Không dùng fit: cover vì có thể cắt mất phần đầu/cằm của người chụp.
+ * @param {string|Buffer} input
+ * @param {string} outputPath
+ * @returns {Promise<string>}
+ */
+async function normalizeImage(input, outputPath) {
+  let buffer;
+  const isFileInput = typeof input === 'string';
+
+  if (isFileInput) {
+    buffer = fs.readFileSync(input);
+  } else {
+    buffer = input;
+  }
+
+  const image = await loadSharpInstance(buffer);
+
+  await image
     .rotate()
     .resize(1280, 738, {
-      fit: 'cover',
-      position: 'center'
+      fit: 'contain',
+      background: {
+        r: 0,
+        g: 0,
+        b: 0,
+        alpha: 1
+      }
     })
     .jpeg({
       quality: 90,
@@ -27,9 +86,14 @@ async function normalizeImage(inputPath, outputPath) {
     })
     .toFile(outputPath);
 
-  // Xóa file thô nếu lưu ra file mới
-  if (inputPath !== outputPath && fs.existsSync(inputPath)) {
-    try { fs.unlinkSync(inputPath); } catch (e) {}
+  if (
+    isFileInput &&
+    input !== outputPath &&
+    fs.existsSync(input)
+  ) {
+    try {
+      fs.unlinkSync(input);
+    } catch (e) {}
   }
 
   return outputPath;
@@ -37,35 +101,29 @@ async function normalizeImage(inputPath, outputPath) {
 
 /**
  * Xóa an toàn tệp tin nếu tồn tại
- * @param {string} filePath 
+ * @param {string} filePath
  */
 function deleteFileSafe(filePath) {
   if (filePath && fs.existsSync(filePath)) {
-    try { fs.unlinkSync(filePath); } catch (e) {}
+    try {
+      fs.unlinkSync(filePath);
+    } catch (e) {}
   }
 }
 
-/**
- * Service xử lý ảnh chuyên biệt đa nền tảng
- * Chuẩn hóa tỷ lệ 1280x738, tự động xoay EXIF, nén JPEG 90%
- */
 class ImageService {
   constructor() {
     this.normalizeImage = normalizeImage;
     this.deleteFileSafe = deleteFileSafe;
   }
 
-  /**
-   * Xử lý file tải lên từ Multer hoặc chuỗi Base64
-   * @param {Object} input - { filePath, base64String }
-   * @returns {Promise<{processedPath: string, filename: string}>}
-   */
   async processFaceImage(input) {
     const filename = `processed_${Date.now()}_${Math.round(Math.random() * 1000)}.jpg`;
     const outputPath = path.join(process.cwd(), 'uploads', filename);
+    const uploadsDir = path.join(process.cwd(), 'uploads');
 
-    if (!fs.existsSync(path.join(process.cwd(), 'uploads'))) {
-      fs.mkdirSync(path.join(process.cwd(), 'uploads'), { recursive: true });
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
     }
 
     if (input.filePath) {
@@ -73,46 +131,24 @@ class ImageService {
     } else if (input.base64String) {
       const base64Data = input.base64String.replace(/^data:image\/\w+;base64,/, '');
       const buffer = Buffer.from(base64Data, 'base64');
-      
-      const metadata = await sharp(buffer).metadata();
-      if (!metadata.format) {
-        throw new Error('INVALID_IMAGE');
-      }
-
-      await sharp(buffer)
-        .rotate()
-        .resize(1280, 738, {
-          fit: 'cover',
-          position: 'center'
-        })
-        .jpeg({
-          quality: 90,
-          mozjpeg: true
-        })
-        .toFile(outputPath);
+      await normalizeImage(buffer, outputPath);
     } else {
       throw new Error('Dữ liệu ảnh đầu vào không hợp lệ');
     }
 
-    return { processedPath: outputPath, filename };
+    return {
+      processedPath: outputPath,
+      filename
+    };
   }
 
-  /**
-   * Dọn dẹp tệp ảnh tạm thời trên ổ đĩa (ngay lập tức)
-   * @param {string} filePath 
-   */
   cleanup(filePath) {
     deleteFileSafe(filePath);
   }
 
-  /**
-   * Dọn dẹp tệp ảnh tạm với độ trễ an toàn (mặc định 30 giây theo SDD v1.0)
-   * Tránh race condition khi HANET Cloud / Cloudflare Tunnel đang tải ảnh
-   * @param {string} filePath - Đường dẫn tuyệt đối của file
-   * @param {number} delayMs - Thời gian chờ tính theo mili-giây (mặc định 30,000ms)
-   */
   cleanupDelayed(filePath, delayMs = 30000) {
     if (!filePath) return;
+
     const timer = setTimeout(() => {
       try {
         if (fs.existsSync(filePath)) {
@@ -120,24 +156,20 @@ class ImageService {
           console.log(`🧹 [ImageService] Đã dọn dẹp file sau ${delayMs / 1000}s: ${path.basename(filePath)}`);
         }
       } catch (err) {
-        console.warn(`⚠️ [ImageService Cleanup Warning] Lỗi xóa file ${filePath}:`, err.message);
+        console.warn('⚠️ [ImageService Cleanup Warning] Lỗi xóa file:', filePath, err.message);
       }
     }, delayMs);
 
-    // Không giữ Event Loop ngăn chặn tiến trình Node.js thoát tự nhiên
     if (timer && typeof timer.unref === 'function') {
       timer.unref();
     }
   }
 
-  /**
-   * Quét và dọn dẹp các file rác/mồ côi trong thư mục uploads cũ hơn maxAgeMs
-   * @param {number} maxAgeMs - Tuổi thọ tối đa của file tính bằng ms (mặc định 1 giờ = 3,600,000ms)
-   */
   cleanOldFiles(maxAgeMs = 60 * 60 * 1000) {
     try {
       const uploadsDir = path.join(process.cwd(), 'uploads');
       if (!fs.existsSync(uploadsDir)) return;
+
       const files = fs.readdirSync(uploadsDir);
       const now = Date.now();
 
@@ -150,9 +182,7 @@ class ImageService {
               fs.unlinkSync(filePath);
               console.log(`🧹 [ImageService GC] Xóa file rác cũ: ${file}`);
             }
-          } catch (fileErr) {
-            // File có thể đã bị xóa bởi process khác
-          }
+          } catch (fileErr) {}
         }
       });
     } catch (err) {

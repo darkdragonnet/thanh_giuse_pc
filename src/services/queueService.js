@@ -25,6 +25,9 @@ const PERMANENT_ERROR_CODES = new Set([
   -1, -1005, -2035, -5005, -5006, -5010, -5011, -9002, -9005, -9006, -9008
 ]);
 
+// Alias tương thích cho NON_RETRIABLE_CODES
+const NON_RETRIABLE_CODES = PERMANENT_ERROR_CODES;
+
 // Map tĩnh phòng ban chuẩn hóa theo quy chuẩn nghiệp vụ
 const STATIC_DEPT_MAP = {
   'thiếu nhi': '990653',
@@ -246,6 +249,21 @@ registrationQueue.on('failed', async (job, err) => {
   if (isUnrecoverable || isMaxAttempts) {
     console.error(`🚨 [DLQ Trigger] Job ${job.id} (${job.name}) thất bại vĩnh viễn sau ${job.attemptsMade} lần thử. Chuyển vào DLQ.`);
 
+    // Bảo toàn file ảnh khi job đi vào DLQ
+    const imagePath = job.data?.imagePath;
+    if (imagePath && fs.existsSync(imagePath)) {
+      try {
+        const dlqPath = path.join(
+          path.dirname(imagePath),
+          'dlq_' + path.basename(imagePath)
+        );
+        fs.renameSync(imagePath, dlqPath);
+        console.log('🛡️ [DLQ Preserved] Đã lưu ảnh lỗi để kiểm tra:', dlqPath);
+      } catch (renameErr) {
+        console.warn('⚠️ [DLQ Preserved Warning] Lỗi đổi tên ảnh lỗi:', renameErr.message);
+      }
+    }
+
     try {
       await deadLetterQueue.add('dead_letter_job', {
         originalJobId: job.id,
@@ -437,6 +455,7 @@ registrationQueue.process('register_person_job', 2, async (job) => {
 
   let finalPersonID = existing_person_id || null;
   let finalAvatarUrl = faceUrl;
+  let jobSucceeded = false;
 
   try {
     try {
@@ -505,6 +524,7 @@ registrationQueue.process('register_person_job', 2, async (job) => {
 
         // Đánh dấu hoàn tất trong Redis 24h
         await idempotencyService.markCompleted(lockKey, 86400);
+        jobSucceeded = true;
 
         return { returnCode: 1, returnMessage: 'Success', personID: finalPersonID, aliasID: finalAlias };
       } else if (registerRes && registerRes.returnCode === -9007) {
@@ -525,6 +545,7 @@ registrationQueue.process('register_person_job', 2, async (job) => {
 
         // Đánh dấu hoàn tất trong Redis 24h
         await idempotencyService.markCompleted(lockKey, 86400);
+        jobSucceeded = true;
 
         return fallbackResult;
       } else {
@@ -534,6 +555,14 @@ registrationQueue.process('register_person_job', 2, async (job) => {
         // Kiểm tra lỗi vĩnh viễn (Permanent / Unrecoverable Failure) -> dừng retry ngay và đưa sang DLQ
         if (PERMANENT_ERROR_CODES.has(code)) {
           console.error(`[Queue register_person_job] ❌ Lỗi vĩnh viễn không thể retry (Mã ${code}): ${errorMsg}`);
+          if (imagePath && fs.existsSync(imagePath)) {
+            const dlqPath = path.join(
+              path.dirname(imagePath),
+              'dlq_' + path.basename(imagePath)
+            );
+            fs.renameSync(imagePath, dlqPath);
+            console.log('🛡️ [DLQ Preserved] Đã lưu ảnh lỗi để kiểm tra:', dlqPath);
+          }
           job.discard(); // Hủy retry trong Bull
           throw new UnrecoverableError(errorMsg, code);
         }
@@ -567,6 +596,7 @@ registrationQueue.process('register_person_job', 2, async (job) => {
         });
 
         await idempotencyService.markCompleted(lockKey, 86400);
+        jobSucceeded = true;
         return fallbackResult;
       }
 
@@ -574,6 +604,14 @@ registrationQueue.process('register_person_job', 2, async (job) => {
 
       if (PERMANENT_ERROR_CODES.has(code)) {
         console.error(`[Queue register_person_job] ❌ Lỗi vĩnh viễn trong catch block (Mã ${code}): ${errorMsg}`);
+        if (imagePath && fs.existsSync(imagePath)) {
+          const dlqPath = path.join(
+            path.dirname(imagePath),
+            'dlq_' + path.basename(imagePath)
+          );
+          fs.renameSync(imagePath, dlqPath);
+          console.log('🛡️ [DLQ Preserved] Đã lưu ảnh lỗi để kiểm tra:', dlqPath);
+        }
         job.discard();
         throw new UnrecoverableError(errorMsg, code);
       }
@@ -584,8 +622,9 @@ registrationQueue.process('register_person_job', 2, async (job) => {
     }
 
   } finally {
-    // [RULE-022] Luôn delay 30 giây mới dọn dẹp ảnh để HANET fetch xong
-    if (imagePath) {
+    // [RULE-022] Đối với Lỗi tạm thời (được retry hoặc job thành công): cleanupDelayed(imagePath, 30000)
+    // Đối với Lỗi vĩnh viễn (đã đổi tên sang dlqPath): KHÔNG gọi imageService.cleanupDelayed
+    if (imagePath && fs.existsSync(imagePath)) {
       imageService.cleanupDelayed(imagePath, 30000);
     }
   }
@@ -611,6 +650,8 @@ registrationQueue.process('update_person_job', 3, async (job) => {
 
   console.log(`[Queue update_person_job] (Attempt ${job.attemptsMade + 1}/${job.opts.attempts}) Bắt đầu xử lý: ${name} (${personID})`);
 
+  let jobSucceeded = false;
+
   try {
     try {
       // 2. Cập nhật thông tin cơ bản trên HANET Cloud
@@ -627,6 +668,14 @@ registrationQueue.process('update_person_job', 3, async (job) => {
         const code = Number(infoResult.returnCode);
         if (PERMANENT_ERROR_CODES.has(code)) {
           console.error(`[Queue update_person_job] ❌ Lỗi vĩnh viễn không thể retry (Mã ${code}): ${errorMsg}`);
+          if (imagePath && fs.existsSync(imagePath)) {
+            const dlqPath = path.join(
+              path.dirname(imagePath),
+              'dlq_' + path.basename(imagePath)
+            );
+            fs.renameSync(imagePath, dlqPath);
+            console.log('🛡️ [DLQ Preserved] Đã lưu ảnh lỗi để kiểm tra:', dlqPath);
+          }
           job.discard();
           throw new UnrecoverableError(errorMsg, code);
         }
@@ -659,6 +708,14 @@ registrationQueue.process('update_person_job', 3, async (job) => {
           const code = Number(faceResult.returnCode);
           if (PERMANENT_ERROR_CODES.has(code)) {
             console.error(`[Queue update_person_job] ❌ Lỗi vĩnh viễn không thể retry khi cập nhật ảnh (Mã ${code}): ${errorMsg}`);
+            if (imagePath && fs.existsSync(imagePath)) {
+              const dlqPath = path.join(
+                path.dirname(imagePath),
+                'dlq_' + path.basename(imagePath)
+              );
+              fs.renameSync(imagePath, dlqPath);
+              console.log('🛡️ [DLQ Preserved] Đã lưu ảnh lỗi để kiểm tra:', dlqPath);
+            }
             job.discard();
             throw new UnrecoverableError(errorMsg, code);
           }
@@ -693,6 +750,7 @@ registrationQueue.process('update_person_job', 3, async (job) => {
 
       // Đánh dấu hoàn tất trong Redis 24h
       await idempotencyService.markCompleted(lockKey, 86400);
+      jobSucceeded = true;
 
       return { success: true, personID };
     } catch (err) {
@@ -703,8 +761,9 @@ registrationQueue.process('update_person_job', 3, async (job) => {
       throw err;
     }
   } finally {
-    // [RULE-022] Xử lý thành công hoặc kết thúc -> Luôn delay 30 giây trước khi xóa file tạm
-    if (imagePath) {
+    // [RULE-022] Đối với Lỗi tạm thời (được retry hoặc job thành công): cleanupDelayed(imagePath, 30000)
+    // Đối với Lỗi vĩnh viễn (đã đổi tên sang dlqPath): KHÔNG gọi imageService.cleanupDelayed
+    if (imagePath && fs.existsSync(imagePath)) {
       imageService.cleanupDelayed(imagePath, 30000);
     }
   }
@@ -800,5 +859,7 @@ module.exports = {
   registrationQueue,
   hanetQueue,
   deadLetterQueue,
-  UnrecoverableError
+  UnrecoverableError,
+  PERMANENT_ERROR_CODES,
+  NON_RETRIABLE_CODES
 };
