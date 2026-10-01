@@ -307,113 +307,78 @@ function extractPersonIDFromHanet(errorOrRes) {
 /**
  * Xử lý Fallback khi khuôn mặt đã tồn tại trên Cloud (Mã lỗi -9007)
  */
-async function handleFaceExistsFallback(params) {
-  const {
-    extractedPersonID,
-    name,
-    finalTitle,
-    finalAlias,
-    finalDeptID,
-    resolvedDepartmentName,
-    faceUrl,
-    publicImageUrl,
-    finalAvatarUrl,
-    targetClass
-  } = params;
+async function handleFaceExistsFallback(hanetError, memberName, className, jobAliasID) {
+  const errData = hanetError?.response?.data || hanetError?.data || hanetError || {};
+  const cloudData = errData?.data || errData || {};
+  let cloudPersonId = String(cloudData.personID || cloudData.personId || cloudData.id || extractPersonIDFromHanet(hanetError) || '').trim();
+  let cloudAliasId = String(cloudData.aliasID || cloudData.alias_id || '').trim();
+  let cloudFaceUrl = String(cloudData.file || cloudData.avatar || cloudData.faceUrl || '').trim();
 
-  let personId = extractedPersonID;
-
-  // 1. Nếu chưa có personID, tìm kiếm theo Tên và Alias trên Cloud
-  if (!personId) {
+  // Nếu chưa có cloudPersonId trực tiếp từ payload, tra cứu nhanh qua list trên Cloud
+  if (!cloudPersonId) {
     try {
       const listRes = await hanetService.getListByPlace();
       const allPersons = listRes?.data || [];
       const match = allPersons.find(p =>
-        (p.aliasID && p.aliasID === finalAlias) ||
-        (p.name && p.name.trim().toLowerCase() === name.trim().toLowerCase())
+        (cloudAliasId && p.aliasID === cloudAliasId) ||
+        (jobAliasID && p.aliasID === jobAliasID) ||
+        (p.name && p.name.trim().toLowerCase() === memberName.trim().toLowerCase())
       );
       if (match) {
-        personId = match.personID || match.id;
-        console.log(`[QueueService] Đã tìm thấy nhân sự trùng khớp: ${name} -> personID: ${personId}`);
+        cloudPersonId = String(match.personID || match.id || '').trim();
+        cloudAliasId = String(match.aliasID || cloudAliasId || '').trim();
+        cloudFaceUrl = cloudFaceUrl || String(match.avatar || match.faceUrl || '').trim();
       }
     } catch (findErr) {
       console.warn(`[QueueService] Tra cứu nhân sự trùng lặp lỗi:`, findErr.message);
     }
   }
 
-  // 2. Cập nhật ảnh đại diện khuôn mặt mới
-  const targetFaceUrl = faceUrl || publicImageUrl || finalAvatarUrl;
-  if (personId && targetFaceUrl) {
-    try {
-      const updateFaceRes = await hanetService.updateByFaceUrl({
-        personID: personId,
-        faceUrl: targetFaceUrl
-      });
-      console.log(`[QueueService] Cập nhật Face URL cho personID ${personId}: returnCode=${updateFaceRes.returnCode}`);
-    } catch (faceErr) {
-      const errCode = faceErr.response?.data?.returnCode;
-      console.warn(`[QueueService] Cập nhật Face URL thất bại:`, getErrorMessage(errCode, faceErr.message));
-    }
-  }
+  console.log(`⚠️ [QueueService] Phát hiện khuôn mặt đã tồn tại trên Cloud (-9007):`);
+  console.log(`   - Cloud PersonID: ${cloudPersonId || '(chưa rõ)'}`);
+  console.log(`   - Cloud AliasID:  ${cloudAliasId || '(chưa rõ)'}`);
 
-  // 3. Cập nhật thông tin cơ bản
-  if (personId) {
-    try {
-      await hanetService.updateInfo({
-        personID: personId,
-        name,
-        title: finalTitle,
-        aliasID: finalAlias,
-        departmentID: finalDeptID
-      });
-      console.log(`[QueueService] ✅ Đã cập nhật thông tin cho personID: ${personId}`);
-    } catch (infoErr) {
-      const errCode = infoErr.response?.data?.returnCode;
-      console.warn(`[QueueService] Cập nhật info thất bại:`, getErrorMessage(errCode, infoErr.message));
-    }
-  }
-
-  // 4. Khóa phòng ban chuẩn
-  if (finalDeptID && personId) {
-    try {
-      await hanetService.addPersonsToDepartment(finalDeptID, personId);
-      console.log(`[QueueService] ✅ Đã khóa phòng ban ${finalDeptID} (${resolvedDepartmentName}) cho personID: ${personId}`);
-    } catch (deptErr) {
-      console.warn(`[QueueService] Gán phòng ban thất bại:`, deptErr.message);
-    }
-  }
-
-  // 5. Cập nhật vào cơ sở dữ liệu PostgreSQL
-  if (personId || finalAlias) {
-    try {
+  if (cloudPersonId) {
+    // 1. Nếu job sinh ra một alias tạm khác với alias gốc trên Cloud, xóa bản ghi thừa
+    if (jobAliasID && cloudAliasId && jobAliasID !== cloudAliasId) {
       await pool.query(
-        `UPDATE persons
-         SET person_id = COALESCE($1, person_id),
-             face_url = COALESCE($2, face_url),
-             sync_status = 'SYNCED',
-             title = COALESCE($3, title),
-             department_id = COALESCE($4, department_id),
-             updated_at = CURRENT_TIMESTAMP
-         WHERE alias_id = $5 OR person_id = $1`,
-        [
-          String(personId),
-          targetFaceUrl || finalAvatarUrl || null,
-          finalTitle || null,
-          finalDeptID || null,
-          finalAlias
-        ]
-      );
-      console.log(`[QueueService] ✅ Đã đồng bộ vào PostgreSQL persons cho personID: ${personId} (Alias: ${finalAlias})`);
-    } catch (dbErr) {
-      console.warn(`[QueueService] Cập nhật Database thất bại:`, dbErr.message);
+        `DELETE FROM persons 
+         WHERE alias_id = $1 
+           AND (person_id IS NULL OR person_id = '') 
+           AND sync_status = 'PENDING';`,
+        [jobAliasID]
+      ).catch(() => {});
     }
+
+    // 2. Cập nhật chính xác vào bản ghi gốc trên DB khớp với Cloud
+    await pool.query(
+      `UPDATE persons 
+       SET 
+          person_id = $1,
+          face_url = CASE WHEN $2 <> '' THEN $2 ELSE face_url END,
+          sync_status = 'SYNCED',
+          updated_at = CURRENT_TIMESTAMP
+       WHERE alias_id = $3 
+          OR person_id = $1 
+          OR (TRIM(LOWER(name)) = TRIM(LOWER($4)) AND ($5::text IS NULL OR class_name = $5));`,
+      [cloudPersonId, cloudFaceUrl, cloudAliasId || jobAliasID, memberName, className]
+    );
+
+    console.log(`✅ [QueueService] Đã đồng bộ an toàn bản ghi gốc theo thông tin HANET Cloud cho ${memberName}.`);
+    return {
+      returnCode: 1,
+      returnMessage: 'Khuôn mặt đã tồn tại trên Cloud, đã đồng bộ an toàn vào Database',
+      personID: cloudPersonId,
+      aliasID: cloudAliasId || jobAliasID,
+      updated: true
+    };
   }
 
   return {
     returnCode: 1,
-    returnMessage: 'Cập nhật Face ID thành công (Khuôn mặt đã tồn tại trên hệ thống)',
-    personID: personId,
-    updated: true
+    returnMessage: 'Đã xử lý fallback khuôn mặt tồn tại',
+    personID: cloudPersonId || null,
+    updated: false
   };
 }
 
@@ -527,21 +492,9 @@ registrationQueue.process('register_person_job', 2, async (job) => {
         jobSucceeded = true;
 
         return { returnCode: 1, returnMessage: 'Success', personID: finalPersonID, aliasID: finalAlias };
-      } else if (registerRes && registerRes.returnCode === -9007) {
+      } else if (registerRes && (registerRes.returnCode === -9007 || registerRes.data?.returnCode === -9007)) {
         // Trường hợp HANET trả HTTP 200 kèm returnCode -9007 (Đã tồn tại khuôn mặt)
-        const extractedId = extractPersonIDFromHanet(registerRes) || finalPersonID;
-        const fallbackResult = await handleFaceExistsFallback({
-          extractedPersonID: extractedId,
-          name,
-          finalTitle,
-          finalAlias,
-          finalDeptID,
-          resolvedDepartmentName: resolved.departmentName,
-          faceUrl,
-          publicImageUrl,
-          finalAvatarUrl,
-          targetClass
-        });
+        const fallbackResult = await handleFaceExistsFallback(registerRes, name, targetClass, finalAlias);
 
         // Đánh dấu hoàn tất trong Redis 24h
         await idempotencyService.markCompleted(lockKey, 86400);
@@ -580,20 +533,8 @@ registrationQueue.process('register_person_job', 2, async (job) => {
       const code = Number(errData?.returnCode || apiErr.code);
 
       // Xử lý lỗi -9007 qua Catch block
-      if (code === -9007 || (errData && errData.returnCode === -9007)) {
-        const extractedId = extractPersonIDFromHanet(apiErr) || finalPersonID;
-        const fallbackResult = await handleFaceExistsFallback({
-          extractedPersonID: extractedId,
-          name,
-          finalTitle,
-          finalAlias,
-          finalDeptID,
-          resolvedDepartmentName: resolved.departmentName,
-          faceUrl,
-          publicImageUrl,
-          finalAvatarUrl,
-          targetClass
-        });
+      if (code === -9007 || (errData && (errData.returnCode === -9007 || errData.data?.returnCode === -9007))) {
+        const fallbackResult = await handleFaceExistsFallback(apiErr, name, targetClass, finalAlias);
 
         await idempotencyService.markCompleted(lockKey, 86400);
         jobSucceeded = true;

@@ -168,39 +168,92 @@ exports.handleRegister = async (req, res, next) => {
     }
     if (!finalDeptID) finalDeptID = '990653'; // Mặc định Thiếu Nhi
 
-    // 5. Chuẩn hóa Alias ID
-    let finalAlias = (aliasID || '').trim();
-    if (!finalAlias) {
-      const countRes = await pool.query('SELECT count(*) FROM persons WHERE class_name = $1', [targetClass]);
-      const nextIdx = parseInt(countRes.rows[0].count || 0, 10) + 1;
-      finalAlias = `${targetClass || 'CHUNG'}_${nextIdx}`;
+    // 5. Kiểm tra thành viên đã tồn tại trong DB chưa (tránh sinh alias rác trùng lặp)
+    let targetAlias = (aliasID || '').trim();
+    let targetPersonId = existing_person_id || null;
+
+    if (!targetAlias) {
+      const existingPerson = await pool.query(
+        `SELECT id, alias_id, person_id, sync_status, face_url, department_id, title 
+         FROM persons 
+         WHERE TRIM(LOWER(name)) = TRIM(LOWER($1)) 
+           AND ($2::text IS NULL OR class_name = $2)
+         LIMIT 1;`,
+        [name.trim(), targetClass]
+      );
+
+      if (existingPerson.rows.length > 0) {
+        // Tái sử dụng alias_id đã có (kể cả cũ hay mới), không sinh thêm mã rác
+        targetAlias = existingPerson.rows[0].alias_id;
+        targetPersonId = existingPerson.rows[0].person_id || targetPersonId;
+
+        // Cập nhật trạng thái PENDING cho bản ghi hiện tại
+        await pool.query(
+          `UPDATE persons 
+           SET updated_at = CURRENT_TIMESTAMP, 
+               sync_status = 'PENDING',
+               face_url = COALESCE($1, face_url),
+               department_id = COALESCE($2, department_id),
+               title = COALESCE($3, title)
+           WHERE id = $4;`,
+          [publicImageUrl, finalDeptID, (title || 'Học Sinh').trim(), existingPerson.rows[0].id]
+        );
+      } else {
+        // Người mới hoàn toàn: Sinh mã theo RULE-004
+        let deptPrefix = 'TN';
+        if (finalDeptID === '990730') deptPrefix = 'LM';
+        else if (finalDeptID === '990731') deptPrefix = 'GT';
+        else if (finalDeptID === '990732') deptPrefix = 'GTR';
+        else if (finalDeptID === '990733') deptPrefix = 'HM';
+
+        const cleanClass = (targetClass || 'CHUNG')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-zA-Z0-9]/g, '')
+          .toUpperCase();
+
+        const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+        targetAlias = `${deptPrefix}_${cleanClass}_${randomSuffix}`;
+
+        // Insert bản ghi PENDING mới vào PostgreSQL
+        await pool.query(
+          `INSERT INTO persons (alias_id, person_id, name, class_name, department_id, title, face_url, sync_status, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', CURRENT_TIMESTAMP)
+           ON CONFLICT (alias_id) DO UPDATE SET
+             name = EXCLUDED.name,
+             face_url = COALESCE(EXCLUDED.face_url, persons.face_url),
+             department_id = COALESCE(EXCLUDED.department_id, persons.department_id),
+             title = EXCLUDED.title,
+             updated_at = CURRENT_TIMESTAMP;`,
+          [targetAlias, targetPersonId, name.trim(), targetClass, finalDeptID, (title || 'Học Sinh').trim(), publicImageUrl]
+        );
+      }
+    } else {
+      // Đã có aliasID truyền lên từ form
+      await pool.query(
+        `INSERT INTO persons (alias_id, person_id, name, class_name, department_id, title, face_url, sync_status, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', CURRENT_TIMESTAMP)
+         ON CONFLICT (alias_id) DO UPDATE SET
+           name = EXCLUDED.name,
+           face_url = COALESCE(EXCLUDED.face_url, persons.face_url),
+           department_id = COALESCE(EXCLUDED.department_id, persons.department_id),
+           title = EXCLUDED.title,
+           updated_at = CURRENT_TIMESTAMP;`,
+        [targetAlias, targetPersonId, name.trim(), targetClass, finalDeptID, (title || 'Học Sinh').trim(), publicImageUrl]
+      );
     }
 
-    // 6. Ghi trước vào Database PostgreSQL với trạng thái PENDING
-    await pool.query(
-      `INSERT INTO persons (alias_id, person_id, name, class_name, department_id, title, face_url, sync_status, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', CURRENT_TIMESTAMP)
-       ON CONFLICT (alias_id) DO UPDATE SET
-         name = EXCLUDED.name,
-         face_url = COALESCE(EXCLUDED.face_url, persons.face_url),
-         department_id = COALESCE(EXCLUDED.department_id, persons.department_id),
-         title = EXCLUDED.title,
-         updated_at = CURRENT_TIMESTAMP
-       RETURNING *`,
-      [finalAlias, existing_person_id || null, name.trim(), targetClass, finalDeptID, (title || 'Học Sinh').trim(), publicImageUrl]
-    );
-
-    // 7. Đẩy tác vụ vào Bull Queue xử lý với HANET Cloud
+    // 6. Đẩy tác vụ vào Bull Queue xử lý với HANET Cloud
     await queueService.enqueueRegisterPerson({
       name: name.trim(),
-      aliasID: finalAlias,
+      aliasID: targetAlias,
       title: title ? title.trim() : 'Học Sinh',
       departmentID: finalDeptID,
       imagePath: processedImage.processedPath,
       imageFilename: processedImage.filename,
       publicImageUrl,
       source_csv: targetClass,
-      existing_person_id: existing_person_id || null
+      existing_person_id: targetPersonId || null
     });
 
     req.flash('success', `Đã tiếp nhận đăng ký cho "${name}". Tiến trình đồng bộ Cloud đang chạy ngầm.`);
