@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>Quản Lý Lớp Học - <%= className %> (PostgreSQL)</title>
+  
+  <!-- Bootstrap 5 CSS & Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  
+  <style>
+    :root {
+      --primary-color: #0d6efd;
+      --bg-surface: #f8f9fa;
+    }
+    body {
+      background-color: #f4f6f9;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .card-header-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .avatar-sm {
+      width: 40px;
+      height: 40px;
+      object-fit: cover;
+      border-radius: 50%;
+    }
+    .avatar-placeholder {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #e9ecef;
+      color: #495057;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+    }
+    .table-hover tbody tr:hover {
+      background-color: rgba(13, 110, 253, 0.04);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Toast Container hiển thị thông báo phản hồi thao tác -->
+  <div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 1080;">
+    <div id="liveToast" class="toast align-items-center text-white border-0" role="alert" aria-live="assertive" aria-atomic="true">
+      <div class="d-flex">
+        <div class="toast-body" id="toastMessage">Thông báo thao tác</div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="container my-4 my-md-5">
+    <!-- Breadcrumb & Header Thông Tin Lớp -->
+    <nav aria-label="breadcrumb" class="mb-3">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/links" class="text-decoration-none">Danh sách lớp</a></li>
+        <li class="breadcrumb-item active" aria-current="page"><%= className %></li>
+      </ol>
+    </nav>
+
+    <div class="card border-0 shadow-sm rounded-3 mb-4">
+      <div class="card-body p-4">
+        <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+          <div>
+            <div class="d-flex align-items-center gap-2">
+              <h3 class="fw-bold mb-0 text-dark" id="displayClassName"><%= className %></h3>
+              <button class="btn btn-sm btn-outline-secondary border-0" onclick="openRenameClassModal()" title="Đổi tên lớp">
+                <i class="bi bi-pencil-square"></i>
+              </button>
+            </div>
+            <p class="text-muted mb-0 small mt-1">
+              Phòng ban: <span class="badge bg-secondary-subtle text-secondary border" id="deptBadge"><%= department || '990653' %></span>
+              <span class="mx-2">•</span>
+              Cơ sở dữ liệu: <span class="badge bg-primary-subtle text-primary border"><i class="bi bi-database-fill me-1"></i>PostgreSQL</span>
+              <span class="mx-2">•</span>
+              Tổng số thành viên: <span class="fw-semibold text-primary" id="totalMembersCount"><%= members ? members.length : 0 %></span>
+            </p>
+          </div>
+
+          <div class="d-flex gap-2">
+            <button class="btn btn-outline-primary" onclick="openRenameClassModal()">
+              <i class="bi bi-tag me-1"></i> Đổi Tên Lớp
+            </button>
+            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addMemberModal">
+              <i class="bi bi-person-plus-fill me-1"></i> Thêm Thành Viên
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bảng Danh Sách Thành Viên -->
+    <div class="card border-0 shadow-sm rounded-3 overflow-hidden">
+      <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+        <h5 class="mb-0 fw-bold">Danh Sách Thành Viên</h5>
+        <div class="input-group" style="max-width: 300px;">
+          <span class="input-group-text bg-light border-end-0"><i class="bi bi-search"></i></span>
+          <input type="text" class="form-control bg-light border-start-0 ps-0" id="searchMemberInput" placeholder="Tìm theo tên hoặc Alias..." onkeyup="filterMembers()">
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover align-middle mb-0" id="memberTable">
+            <thead class="table-light text-secondary text-uppercase small">
+              <tr>
+                <th class="ps-4">Thành Viên</th>
+                <th>Chức Vụ</th>
+                <th>Lớp</th>
+                <th>Phòng Ban</th>
+                <th>Trạng Thái Sync</th>
+                <th class="text-end pe-4">Thao Tác</th>
+              </tr>
+            </thead>
+            <tbody id="memberList">
+              <!-- Render động qua JavaScript -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: THÊM THÀNH VIÊN -->
+  <div class="modal fade" id="addMemberModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content rounded-3 border-0 shadow">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold">Thêm Thành Viên Mới (PostgreSQL)</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <form id="addMemberForm">
+          <div class="modal-body">
+            <div class="mb-3">
+              <label for="addName" class="form-label fw-semibold">Họ và Tên <span class="text-danger">*</span></label>
+              <input type="text" class="form-control" id="addName" required placeholder="Ví dụ: Nguyễn Văn A">
+            </div>
+            <div class="mb-3">
+              <label for="addTitle" class="form-label fw-semibold">Chức Vụ</label>
+              <select class="form-select" id="addTitle">
+                <option value="Học Sinh">Học Sinh / Đoàn Sinh</option>
+                <option value="Giáo Lý Viên">Giáo Lý Viên</option>
+                <option value="Lớp Trưởng">Lớp Trưởng</option>
+                <option value="Hội Viên">Hội Viên</option>
+                <option value="Thành Viên">Thành Viên</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label for="addClass" class="form-label fw-semibold">Lớp</label>
+              <input type="text" class="form-control bg-light" id="addClass" value="<%= className %>" readonly>
+            </div>
+            <div class="mb-3">
+              <label for="addDepartment" class="form-label fw-semibold">Phòng Ban</label>
+              <select class="form-select" id="addDepartment">
+                <option value="990653" <%= (department === '990653' || !department) ? 'selected' : '' %>>Thiếu Nhi (990653)</option>
+                <option value="990730" <%= department === '990730' ? 'selected' : '' %>>Legiô Mariae (990730)</option>
+                <option value="990731" <%= department === '990731' ? 'selected' : '' %>>Giới Trẻ (990731)</option>
+              </select>
+            </div>
+          </div>
+          <div class="modal-footer border-0">
+            <button type="button" class="btn btn-light" data-bs-dismiss="modal">Hủy</button>
+            <button type="submit" class="btn btn-primary" id="btnSaveMember">Lưu Vào Database</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: SỬA THÔNG TIN & ĐỔI TÊN THÀNH VIÊN -->
+  <div class="modal fade" id="editMemberModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content rounded-3 border-0 shadow">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold">Chỉnh Sửa Thông Tin Thành Viên</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <form id="editMemberForm">
+          <input type="hidden" id="editMemberIndex">
+          <input type="hidden" id="editMemberAlias">
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label text-muted small">AliasID (Định danh duy nhất)</label>
+              <input type="text" class="form-control bg-light" id="editMemberAliasDisplay" readonly>
+            </div>
+            <div class="mb-3">
+              <label for="editName" class="form-label fw-semibold">Họ và Tên</label>
+              <input type="text" class="form-control" id="editName" required>
+            </div>
+            <div class="mb-3">
+              <label for="editTitle" class="form-label fw-semibold">Chức Vụ</label>
+              <select class="form-select" id="editTitle">
+                <option value="Học Sinh">Học Sinh / Đoàn Sinh</option>
+                <option value="Giáo Lý Viên">Giáo Lý Viên</option>
+                <option value="Lớp Trưởng">Lớp Trưởng</option>
+                <option value="Hội Viên">Hội Viên</option>
+                <option value="Thành Viên">Thành Viên</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label for="editClass" class="form-label fw-semibold">Lớp</label>
+              <input type="text" class="form-control" id="editClass" required>
+            </div>
+            <div class="mb-3">
+              <label for="editDepartment" class="form-label fw-semibold">Phòng Ban</label>
+              <select class="form-select" id="editDepartment">
+                <option value="990653">Thiếu Nhi (990653)</option>
+                <option value="990730">Legiô Mariae (990730)</option>
+                <option value="990731">Giới Trẻ (990731)</option>
+              </select>
+            </div>
+          </div>
+          <div class="modal-footer border-0">
+            <button type="button" class="btn btn-light" data-bs-dismiss="modal">Hủy</button>
+            <button type="submit" class="btn btn-primary">Lưu Thay Đổi</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: ĐỔI TÊN LỚP (RENAME CLASS) -->
+  <div class="modal fade" id="renameClassModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content rounded-3 border-0 shadow">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold">Đổi Tên Lớp Học (PostgreSQL ACID)</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <form id="renameClassForm">
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label text-muted">Tên hiện tại</label>
+              <input type="text" class="form-control bg-light" id="currentClassNameDisplay" readonly>
+            </div>
+            <div class="mb-3">
+              <label for="newClassNameInput" class="form-label fw-semibold">Tên Lớp Mới <span class="text-danger">*</span></label>
+              <input type="text" class="form-control" id="newClassNameInput" required placeholder="Ví dụ: ThemSuc_1b">
+              <small class="text-muted">Lưu ý: Toàn bộ bảng classes và persons sẽ được cập nhật đồng bộ qua Transaction.</small>
+            </div>
+          </div>
+          <div class="modal-footer border-0">
+            <button type="button" class="btn btn-light" data-bs-dismiss="modal">Đóng</button>
+            <button type="submit" class="btn btn-primary">Xác Nhận Đổi Tên</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: XÁC NHẬN XÓA THÀNH VIÊN -->
+  <div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content rounded-3 border-0 shadow">
+        <div class="modal-header border-0 pb-0">
+          <h5 class="modal-title fw-bold text-danger"><i class="bi bi-exclamation-triangle-fill me-2"></i>Xác Nhận Xóa</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body py-3">
+          <p class="mb-0">Bạn có chắc chắn muốn xóa thành viên <strong id="deleteMemberName"></strong> khỏi cơ sở dữ liệu không?</p>
+          <small class="text-muted">Hành động này sẽ xóa vĩnh viễn dòng dữ liệu trong bảng persons.</small>
+        </div>
+        <div class="modal-footer border-0 pt-0">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Hủy Bỏ</button>
+          <button type="button" class="btn btn-danger" id="confirmDeleteBtn">Xóa Khỏi Database</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap 5 Bundle JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <script>
+    let currentClassName = "<%= className %>";
+    let members = <%- JSON.stringify(members || []) %>;
+    let memberToDeleteIndex = null;
+
+    function showToast(message, isSuccess = true) {
+      const toastEl = document.getElementById('liveToast');
+      const toastBody = document.getElementById('toastMessage');
+      toastEl.classList.remove('bg-success', 'bg-danger');
+      toastEl.classList.add(isSuccess ? 'bg-success' : 'bg-danger');
+      toastBody.innerText = message;
+      new bootstrap.Toast(toastEl).show();
+    }
+
+    function renderMembers() {
+      const tbody = document.getElementById('memberList');
+      tbody.innerHTML = '';
+      document.getElementById('totalMembersCount').innerText = members.length;
+
+      if (!members || members.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="6" class="text-center py-4 text-muted">
+              <i class="bi bi-inbox fs-2 d-block mb-1 text-secondary"></i>
+              Chưa có thành viên nào trong lớp này (PostgreSQL).
+            </td>
+          </tr>`;
+        return;
+      }
+
+      members.forEach((m, idx) => {
+        const name = m.name || m.Tên || '';
+        const title = m.title || m['Chức Vụ'] || 'Học Sinh';
+        const cls = m.class_name || m.class || m['Lớp'] || currentClassName;
+        const dept = m.department_id === '990730' ? 'Legiô Mariae' : (m.department_id === '990731' ? 'Giới Trẻ' : (m['Phòng Ban'] || 'Thiếu Nhi'));
+        const avatar = m.face_url || m.links || m.avatar || '';
+        const hasFace = !!(m.person_id || (m.PersonID && String(m.PersonID).trim() !== ''));
+        const syncStatus = m.sync_status || (hasFace ? 'SYNCED' : 'PENDING');
+        const alias = m.alias_id || m.AliasID || m.alias || '';
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="ps-4">
+            <div class="d-flex align-items-center gap-3">
+              ${avatar 
+                ? `<img src="${avatar}" class="avatar-sm" alt="Avatar">`
+                : `<div class="avatar-placeholder">${name.charAt(0).toUpperCase()}</div>`}
+              <div>
+                <div class="fw-semibold text-dark">${name}</div>
+                <div class="small text-muted font-monospace">${alias}</div>
+              </div>
+            </div>
+          </td>
+          <td><span class="badge bg-light text-dark border">${title}</span></td>
+          <td>${cls}</td>
+          <td><span class="badge bg-secondary-subtle text-secondary border">${dept}</span></td>
+          <td>
+            ${syncStatus === 'SYNCED' || hasFace
+              ? `<span class="badge bg-success-subtle text-success border border-success-subtle"><i class="bi bi-check-circle-fill me-1"></i>Đã có Face ID</span>`
+              : `<span class="badge bg-warning-subtle text-warning border border-warning-subtle"><i class="bi bi-clock me-1"></i>Chờ đồng bộ</span>`}
+          </td>
+          <td class="text-end pe-4">
+            <button class="btn btn-sm btn-outline-primary me-1" onclick="openEditMemberModal(${idx})" title="Sửa thông tin">
+              <i class="bi bi-pencil"></i> Sửa
+            </button>
+            <button class="btn btn-sm btn-outline-danger" onclick="openDeleteConfirmModal(${idx})" title="Xóa">
+              <i class="bi bi-trash"></i>
+            </button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function filterMembers() {
+      const q = document.getElementById('searchMemberInput').value.toLowerCase();
+      const rows = document.querySelectorAll('#memberList tr');
+      rows.forEach(r => {
+        const text = r.innerText.toLowerCase();
+        r.style.display = text.includes(q) ? '' : 'none';
+      });
+    }
+
+    function openRenameClassModal() {
+      document.getElementById('currentClassNameDisplay').value = currentClassName;
+      document.getElementById('newClassNameInput').value = currentClassName;
+      new bootstrap.Modal(document.getElementById('renameClassModal')).show();
+    }
+
+    function openEditMemberModal(index) {
+      const m = members[index];
+      document.getElementById('editMemberIndex').value = index;
+      const alias = m.alias_id || m.AliasID || m.alias || '';
+      document.getElementById('editMemberAlias').value = alias;
+      document.getElementById('editMemberAliasDisplay').value = alias;
+      document.getElementById('editName').value = m.name || m.Tên || '';
+      document.getElementById('editTitle').value = m.title || m['Chức Vụ'] || 'Học Sinh';
+      document.getElementById('editClass').value = m.class_name || m['Lớp'] || m.class || currentClassName;
+      document.getElementById('editDepartment').value = m.department_id || '990653';
+      new bootstrap.Modal(document.getElementById('editMemberModal')).show();
+    }
+
+    function openDeleteConfirmModal(index) {
+      memberToDeleteIndex = index;
+      const m = members[index];
+      document.getElementById('deleteMemberName').innerText = `"${m.name || m.Tên}"`;
+      new bootstrap.Modal(document.getElementById('deleteConfirmModal')).show();
+    }
+
+    document.getElementById('addMemberForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const newMember = {
+        name: document.getElementById('addName').value.trim(),
+        title: document.getElementById('addTitle').value,
+        class: document.getElementById('addClass').value.trim(),
+        department: document.getElementById('addDepartment').value.trim()
+      };
+
+      try {
+        const res = await fetch(`/class/${encodeURIComponent(currentClassName)}/member`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newMember)
+        });
+        const result = await res.json();
+        
+        if (res.ok && result.success) {
+          const m = result.member || {};
+          members.push({
+            id: m.id,
+            name: m.name || newMember.name,
+            title: m.title || newMember.title,
+            class_name: m.class_name || newMember.class,
+            department_id: m.department_id || newMember.department,
+            alias_id: m.alias_id || result.aliasID || '',
+            person_id: m.person_id || '',
+            face_url: m.face_url || '',
+            sync_status: m.sync_status || 'PENDING'
+          });
+          renderMembers();
+          bootstrap.Modal.getInstance(document.getElementById('addMemberModal')).hide();
+          e.target.reset();
+          showToast('Đã thêm thành viên vào PostgreSQL thành công!');
+        } else {
+          showToast(result.message || 'Lỗi thêm thành viên', false);
+        }
+      } catch (err) {
+        showToast('Lỗi kết nối máy chủ', false);
+      }
+    });
+
+    document.getElementById('editMemberForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const idx = document.getElementById('editMemberIndex').value;
+      const updatedData = {
+        alias: document.getElementById('editMemberAlias').value,
+        name: document.getElementById('editName').value.trim(),
+        title: document.getElementById('editTitle').value,
+        class: document.getElementById('editClass').value.trim(),
+        department: document.getElementById('editDepartment').value.trim()
+      };
+
+      try {
+        const res = await fetch(`/class/${encodeURIComponent(currentClassName)}/member`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedData)
+        });
+        const result = await res.json();
+
+        if (res.ok && result.success) {
+          const updated = result.member;
+          members[idx].name = updated?.name || updatedData.name;
+          members[idx].title = updated?.title || updatedData.title;
+          members[idx].class_name = updated?.class_name || updatedData.class;
+          members[idx].department_id = updated?.department_id || updatedData.department;
+          renderMembers();
+          bootstrap.Modal.getInstance(document.getElementById('editMemberModal')).hide();
+          showToast('Đã cập nhật dữ liệu trong PostgreSQL!');
+        } else {
+          showToast(result.message || 'Lỗi cập nhật', false);
+        }
+      } catch (err) {
+        showToast('Lỗi kết nối máy chủ', false);
+      }
+    });
+
+    document.getElementById('confirmDeleteBtn').addEventListener('click', async function() {
+      if (memberToDeleteIndex === null) return;
+      const m = members[memberToDeleteIndex];
+      const alias = m.alias_id || m.AliasID || m.alias || '';
+
+      try {
+        const res = await fetch(`/class/${encodeURIComponent(currentClassName)}/member/${encodeURIComponent(alias)}`, {
+          method: 'DELETE'
+        });
+        const result = await res.json();
+
+        if (res.ok && result.success) {
+          members.splice(memberToDeleteIndex, 1);
+          renderMembers();
+          bootstrap.Modal.getInstance(document.getElementById('deleteConfirmModal')).hide();
+          showToast('Đã xóa thành viên khỏi PostgreSQL database!');
+        } else {
+          showToast(result.message || 'Lỗi xóa thành viên', false);
+        }
+      } catch (err) {
+        showToast('Lỗi kết nối máy chủ', false);
+      }
+    });
+
+    document.getElementById('renameClassForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const newName = document.getElementById('newClassNameInput').value.trim();
+      if (!newName || newName === currentClassName) return;
+
+      try {
+        const res = await fetch(`/class/${encodeURIComponent(currentClassName)}/rename`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newClassName: newName })
+        });
+        const result = await res.json();
+
+        if (res.ok && result.success) {
+          currentClassName = newName;
+          document.getElementById('displayClassName').innerText = newName;
+          document.title = `Quản Lý Lớp Học - ${newName} (PostgreSQL)`;
+          bootstrap.Modal.getInstance(document.getElementById('renameClassModal')).hide();
+          showToast('Đổi tên lớp thành công trong PostgreSQL (Transaction ACID)!');
+          window.history.replaceState(null, '', `/class/${encodeURIComponent(newName)}`);
+        } else {
+          showToast(result.message || 'Lỗi đổi tên lớp', false);
+        }
+      } catch (err) {
+        showToast('Lỗi kết nối máy chủ', false);
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', renderMembers);
+  </script>
+</body>
+</html>
