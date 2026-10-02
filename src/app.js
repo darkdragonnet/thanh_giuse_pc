@@ -17,6 +17,7 @@ dotenv.config();
 const personRoutes = require('./routes/personRoutes');
 const departmentRoutes = require('./routes/departmentRoutes');
 const classRoutes = require('./routes/classRoutes');
+const transferRoutes = require('./routes/transferRoutes');
 
 // Khởi chạy Garbage Collection định kỳ mỗi 30 phút dọn dẹp file tạm mồ côi cũ hơn 1 giờ
 const gcTimer = setInterval(() => {
@@ -118,6 +119,7 @@ app.get('/health', (req, res) => {
 // Mount Routes
 app.use('/departments', departmentRoutes);
 app.use('/', classRoutes);
+app.use('/', transferRoutes);
 app.use('/', personRoutes);
 
 app.listen(PORT, () => {

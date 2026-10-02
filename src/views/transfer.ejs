@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title><%= title || 'Quản Lý Chuyển Lớp & Phân Bổ Nhân Sự' %></title>
+  
+  <!-- Bootstrap 5 CSS & Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --primary-color: #3b82f6;
+      --primary-dark: #1d4ed8;
+      --primary-light: #eff6ff;
+      --surface-bg: #f8fafc;
+      --card-bg: #ffffff;
+      --border-color: #e2e8f0;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+    }
+
+    body {
+      background-color: var(--surface-bg);
+      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      color: var(--text-main);
+      min-height: 100vh;
+    }
+
+    .hero-header {
+      background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+      color: white;
+      border-radius: 1rem;
+      padding: 1.75rem 2rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.15);
+    }
+
+    .transfer-pane {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 1rem;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+      display: flex;
+      flex-direction: column;
+      height: 680px;
+      transition: all 0.2s ease;
+    }
+
+    .transfer-pane:hover {
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.06);
+    }
+
+    .pane-header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border-color);
+      background-color: #ffffff;
+      border-top-left-radius: 1rem;
+      border-top-right-radius: 1rem;
+    }
+
+    .pane-search-bar {
+      padding: 0.75rem 1.5rem;
+      background-color: #f8fafc;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .pane-member-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem 1.25rem;
+    }
+
+    .pane-member-list::-webkit-scrollbar {
+      width: 6px;
+    }
+    .pane-member-list::-webkit-scrollbar-thumb {
+      background-color: #cbd5e1;
+      border-radius: 4px;
+    }
+
+    .member-item {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      padding: 0.75rem 1rem;
+      border: 1px solid var(--border-color);
+      border-radius: 0.75rem;
+      margin-bottom: 0.5rem;
+      background: white;
+      transition: all 0.15s ease-in-out;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .member-item:hover {
+      background-color: #f1f5f9;
+      border-color: #cbd5e1;
+    }
+
+    .member-item.selected {
+      background-color: var(--primary-light);
+      border-color: #93c5fd;
+    }
+
+    .avatar-sm {
+      width: 42px;
+      height: 42px;
+      object-fit: cover;
+      border-radius: 50%;
+      border: 2px solid #e2e8f0;
+      flex-shrink: 0;
+    }
+
+    .avatar-placeholder {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: #e2e8f0;
+      color: #475569;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.95rem;
+      flex-shrink: 0;
+    }
+
+    .center-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem 0;
+    }
+
+    .btn-transfer {
+      width: 100%;
+      max-width: 170px;
+      padding: 0.75rem 1rem;
+      font-weight: 600;
+      border-radius: 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+      transition: all 0.2s ease;
+    }
+
+    .btn-transfer:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 15px -3px rgba(59, 130, 246, 0.3);
+    }
+
+    .history-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 1rem;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+    }
+
+    .badge-sync {
+      font-size: 0.75rem;
+      padding: 0.35em 0.65em;
+      border-radius: 9999px;
+    }
+
+    .empty-state {
+      padding: 3rem 1rem;
+      text-align: center;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 1090;">
+    <div id="liveToast" class="toast align-items-center text-white border-0 shadow-lg" role="alert" aria-live="assertive" aria-atomic="true">
+      <div class="d-flex">
+        <div class="toast-body d-flex align-items-center gap-2" id="toastMessage">
+          <i class="bi bi-info-circle-fill fs-5"></i>
+          <span>Thông báo</span>
+        </div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="container-fluid px-lg-5 my-4">
+    <!-- Breadcrumb & Hero Header -->
+    <div class="hero-header">
+      <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+        <div>
+          <nav aria-label="breadcrumb">
+            <ol class="breadcrumb mb-2 text-white-50">
+              <li class="breadcrumb-item"><a href="/links" class="text-decoration-none text-white-50">Lớp Học</a></li>
+              <li class="breadcrumb-item active text-white" aria-current="page">Điều Chuyển Nhân Sự (Saga)</li>
+            </ol>
+          </nav>
+          <h2 class="fw-bold mb-1 d-flex align-items-center gap-2">
+            <i class="bi bi-arrow-left-right text-primary"></i> Quản Lý Chuyển Lớp & Phân Bổ Nhân Sự
+          </h2>
+          <p class="text-white-50 mb-0 small">
+            Đối chiếu danh sách lớp, tự động đổi Face ID trên HANET Cloud theo chuẩn Saga và lưu điểm phục hồi snapshot khôi phục dữ liệu 100%.
+          </p>
+        </div>
+        <div class="d-flex gap-2 flex-wrap">
+          <span class="badge bg-primary-subtle text-primary border border-primary px-3 py-2 d-flex align-items-center">
+            <i class="bi bi-database-check me-1"></i> PostgreSQL 16
+          </span>
+          <a href="/links" class="btn btn-outline-light btn-sm px-3 py-2">
+            <i class="bi bi-arrow-left me-1"></i> Danh Sách Lớp
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Dual-Pane Layout -->
+    <div class="row g-4 mb-5">
+      <!-- CỘT TRÁI (LEFT PANE) -->
+      <div class="col-lg-5">
+        <div class="transfer-pane">
+          <!-- Header: Chọn lớp -->
+          <div class="pane-header">
+            <label class="form-label fw-bold text-secondary small text-uppercase mb-1">
+              <i class="bi bi-diagram-3 me-1 text-primary"></i> Lớp Bên Trái
+            </label>
+            <select class="form-select form-select-lg fw-semibold" id="leftClassSelect">
+              <option value="" disabled selected>-- Chọn Lớp Nguồn / Đích --</option>
+              <% classes.forEach(function(cls) { %>
+                <option value="<%= cls.name %>"><%= cls.name %> (Phòng: <%= cls.department_id || '990653' %>)</option>
+              <% }); %>
+            </select>
+          </div>
+
+          <!-- Filter & Select All -->
+          <div class="pane-search-bar">
+            <div class="input-group input-group-sm mb-2">
+              <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+              <input type="text" class="form-control border-start-0 ps-0" id="leftSearchInput" placeholder="Tìm nhanh theo tên, alias..." disabled>
+            </div>
+            <div class="d-flex justify-content-between align-items-center px-1">
+              <div class="form-check mb-0">
+                <input class="form-check-input" type="checkbox" id="leftSelectAll" disabled>
+                <label class="form-check-label small fw-semibold text-secondary" for="leftSelectAll">Chọn tất cả</label>
+              </div>
+              <span class="badge bg-secondary-subtle text-secondary border small" id="leftCountBadge">
+                Đã chọn: <b id="leftSelectedCount">0</b> / <span id="leftTotalCount">0</span>
+              </span>
+            </div>
+          </div>
+
+          <!-- Danh sách thành viên bên trái -->
+          <div class="pane-member-list" id="leftMemberList">
+            <div class="empty-state">
+              <i class="bi bi-folder2-open display-6 d-block mb-2 text-muted"></i>
+              <span>Vui lòng chọn lớp học để tải danh sách thành viên</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CỘT ĐIỀU KHIỂN TRUNG TÂM (CENTER CONTROLS) -->
+      <div class="col-lg-2 d-flex align-items-center justify-content-center">
+        <div class="center-controls w-100">
+          <button class="btn btn-primary btn-transfer" id="btnTransferRight" disabled>
+            <span>Sang Phải</span>
+            <i class="bi bi-arrow-right-circle-fill fs-5"></i>
+          </button>
+
+          <div class="text-center my-2">
+            <span class="badge bg-light text-muted border px-2 py-1 small">
+              <i class="bi bi-shield-check text-success me-1"></i>Saga Flow
+            </span>
+          </div>
+
+          <button class="btn btn-primary btn-transfer" id="btnTransferLeft" disabled>
+            <i class="bi bi-arrow-left-circle-fill fs-5"></i>
+            <span>Sang Trái</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- CỘT PHẢI (RIGHT PANE) -->
+      <div class="col-lg-5">
+        <div class="transfer-pane">
+          <!-- Header: Chọn lớp -->
+          <div class="pane-header">
+            <label class="form-label fw-bold text-secondary small text-uppercase mb-1">
+              <i class="bi bi-diagram-3 me-1 text-primary"></i> Lớp Bên Phải
+            </label>
+            <select class="form-select form-select-lg fw-semibold" id="rightClassSelect">
+              <option value="" disabled selected>-- Chọn Lớp Nguồn / Đích --</option>
+              <% classes.forEach(function(cls) { %>
+                <option value="<%= cls.name %>"><%= cls.name %> (Phòng: <%= cls.department_id || '990653' %>)</option>
+              <% }); %>
+            </select>
+          </div>
+
+          <!-- Filter & Select All -->
+          <div class="pane-search-bar">
+            <div class="input-group input-group-sm mb-2">
+              <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+              <input type="text" class="form-control border-start-0 ps-0" id="rightSearchInput" placeholder="Tìm nhanh theo tên, alias..." disabled>
+            </div>
+            <div class="d-flex justify-content-between align-items-center px-1">
+              <div class="form-check mb-0">
+                <input class="form-check-input" type="checkbox" id="rightSelectAll" disabled>
+                <label class="form-check-label small fw-semibold text-secondary" for="rightSelectAll">Chọn tất cả</label>
+              </div>
+              <span class="badge bg-secondary-subtle text-secondary border small" id="rightCountBadge">
+                Đã chọn: <b id="rightSelectedCount">0</b> / <span id="rightTotalCount">0</span>
+              </span>
+            </div>
+          </div>
+
+          <!-- Danh sách thành viên bên phải -->
+          <div class="pane-member-list" id="rightMemberList">
+            <div class="empty-state">
+              <i class="bi bi-folder2-open display-6 d-block mb-2 text-muted"></i>
+              <span>Vui lòng chọn lớp học để tải danh sách thành viên</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LỊCH SỬ CHUYỂN LỚP & ĐIỂM PHỤC HỒI (RESTORE PANEL) -->
+    <div class="history-card mb-5">
+      <div class="card-header bg-white border-bottom p-3 d-flex justify-content-between align-items-center">
+        <div>
+          <h5 class="fw-bold mb-0 text-dark">
+            <i class="bi bi-clock-history text-primary me-2"></i> Lịch Sử Chuyển Lớp & Điểm Phục Hồi (Snapshots)
+          </h5>
+          <small class="text-muted">Các đợt chuyển lớp đều được lưu snapshot tự động để phục hồi khôi phục dữ liệu 100%.</small>
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover align-middle mb-0" id="batchHistoryTable">
+            <thead class="table-light">
+              <tr class="small text-muted text-uppercase">
+                <th class="ps-3">Mã Snapshot (Batch ID)</th>
+                <th>Điều Chuyển</th>
+                <th>Kết Quả Đồng Bộ</th>
+                <th>Thời Gian Thực Hiện</th>
+                <th>Trạng Thái</th>
+                <th class="text-end pe-3">Thao Tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% if (recentBatches && recentBatches.length > 0) { %>
+                <% recentBatches.forEach(function(batch) { %>
+                  <tr id="row-batch-<%= batch.batch_id %>">
+                    <td class="ps-3 font-monospace fw-semibold text-primary">
+                      <%= batch.batch_id %>
+                    </td>
+                    <td>
+                      <span class="badge bg-light text-dark border"><%= batch.from_class %></span>
+                      <i class="bi bi-arrow-right text-primary mx-1"></i>
+                      <span class="badge bg-primary-subtle text-primary border"><%= batch.to_class %></span>
+                    </td>
+                    <td>
+                      <span class="fw-semibold text-success"><%= batch.synced_count %></span> / <%= batch.total_count %> thành viên
+                      <% if (parseInt(batch.failed_count) > 0) { %>
+                        <span class="badge bg-danger-subtle text-danger ms-1">(<%= batch.failed_count %> lỗi)</span>
+                      <% } %>
+                    </td>
+                    <td class="small text-muted">
+                      <%= new Date(batch.created_at).toLocaleString('vi-VN') %>
+                    </td>
+                    <td>
+                      <% if (batch.restored_at) { %>
+                        <span class="badge bg-secondary-subtle text-secondary border">
+                          <i class="bi bi-arrow-counterclockwise me-1"></i> Đã hoàn tác (<%= new Date(batch.restored_at).toLocaleTimeString('vi-VN') %>)
+                        </span>
+                      <% } else { %>
+                        <span class="badge bg-success-subtle text-success border">
+                          <i class="bi bi-check-circle me-1"></i> Khả dụng phục hồi
+                        </span>
+                      <% } %>
+                    </td>
+                    <td class="text-end pe-3">
+                      <% if (!batch.restored_at) { %>
+                        <button class="btn btn-sm btn-outline-danger" onclick="openRestoreModal('<%= batch.batch_id %>', '<%= batch.from_class %>', '<%= batch.to_class %>', <%= batch.total_count %>)">
+                          <i class="bi bi-arrow-counterclockwise me-1"></i> Hoàn Tác
+                        </button>
+                      <% } else { %>
+                        <button class="btn btn-sm btn-light border text-muted" disabled>
+                          <i class="bi bi-check2-all me-1"></i> Đã Phục Hồi
+                        </button>
+                      <% } %>
+                    </td>
+                  </tr>
+                <% }); %>
+              <% } else { %>
+                <tr>
+                  <td colspan="6" class="text-center py-4 text-muted">
+                    Chưa có lịch sử đợt chuyển lớp nào trong cơ sở dữ liệu.
+                  </td>
+                </tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL 1: XÁC NHẬN CHUYỂN LỚP (PRE-TRANSFER CONFIRMATION MODAL) -->
+  <!-- ========================================================================= -->
+  <div class="modal fade" id="preTransferModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+      <div class="modal-content border-0 shadow-lg">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title fw-bold">
+            <i class="bi bi-shield-exclamation me-2"></i> Xác Nhận Điều Chuyển Lớp & Phân Bổ Nhân Sự
+          </h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-4">
+          <!-- Phân tích lộ trình chuyển -->
+          <div class="d-flex align-items-center justify-content-between p-3 bg-light rounded-3 border mb-3">
+            <div>
+              <small class="text-muted d-block">Lớp Nguồn:</small>
+              <h5 class="fw-bold mb-0 text-dark" id="modalFromClass">--</h5>
+            </div>
+            <i class="bi bi-arrow-right-circle-fill text-primary display-6"></i>
+            <div class="text-end">
+              <small class="text-muted d-block">Lớp Đích:</small>
+              <h5 class="fw-bold mb-0 text-primary" id="modalToClass">--</h5>
+            </div>
+          </div>
+
+          <!-- Thông số phân tách DB Only vs HANET Sync -->
+          <div class="row g-2 mb-3">
+            <div class="col-4">
+              <div class="card bg-light border text-center p-2">
+                <small class="text-muted">Tổng số chuyển</small>
+                <h4 class="fw-bold mb-0 text-dark" id="modalTotalCount">0</h4>
+              </div>
+            </div>
+            <div class="col-4">
+              <div class="card bg-secondary-subtle border-secondary-subtle text-center p-2">
+                <small class="text-secondary">Chỉ cập nhật DB</small>
+                <h4 class="fw-bold mb-0 text-secondary" id="modalDbOnlyCount">0</h4>
+              </div>
+            </div>
+            <div class="col-4">
+              <div class="card bg-success-subtle border-success-subtle text-center p-2">
+                <small class="text-success">Đồng bộ HANET Cloud</small>
+                <h4 class="fw-bold mb-0 text-success" id="modalHanetSyncCount">0</h4>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bảng xem trước thành viên và New Alias -->
+          <label class="form-label fw-bold text-secondary small text-uppercase">Danh sách thành viên xem trước:</label>
+          <div class="table-responsive border rounded-3 mb-3" style="max-height: 240px;">
+            <table class="table table-sm table-hover align-middle mb-0">
+              <thead class="table-light small">
+                <tr>
+                  <th>#</th>
+                  <th>Họ và Tên</th>
+                  <th>Alias Hiện Tại</th>
+                  <th>Alias Dự Kiến Mới</th>
+                  <th>Phân Loại</th>
+                </tr>
+              </thead>
+              <tbody id="modalPreviewTableBody">
+                <!-- Chèn động bằng JS -->
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Điểm khôi phục snapshot notice -->
+          <div class="alert alert-info d-flex align-items-center mb-0 py-2">
+            <i class="bi bi-info-circle-fill fs-5 me-2"></i>
+            <small>
+              Hệ thống sẽ tự động khởi tạo <b>Điểm Phục Hồi (Snapshot TX-...)</b> trước khi xử lý. Bạn có thể hoàn tác toàn bộ dữ liệu này bất kỳ lúc nào nếu có sai sót.
+            </small>
+          </div>
+        </div>
+        <div class="modal-footer bg-light">
+          <button type="button" class="btn btn-secondary px-3" data-bs-dismiss="modal">Hủy Bỏ</button>
+          <button type="button" class="btn btn-primary px-4 fw-semibold" id="btnConfirmTransfer">
+            <i class="bi bi-check-circle-fill me-1"></i> Bắt Đầu Chuyển Lớp
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL 2: TIẾN TRÌNH CHUYỂN LỚP (PROGRESS BAR MODAL) -->
+  <!-- ========================================================================= -->
+  <div class="modal fade" id="progressModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content border-0 shadow-lg p-3">
+        <div class="modal-body text-center p-4">
+          <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status">
+            <span class="visually-hidden">Loading...</span>
+          </div>
+          <h5 class="fw-bold text-dark mb-2" id="progressTitle">Đang Điều Chuyển Nhân Sự...</h5>
+          <p class="text-muted small mb-3" id="progressSubtitle">
+            Đang thực thi Saga Workflow (Cloud HANET + PostgreSQL)...
+          </p>
+
+          <div class="progress mb-2" style="height: 12px; border-radius: 6px;">
+            <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" id="transferProgressBar" style="width: 100%;"></div>
+          </div>
+          <small class="text-muted font-monospace" id="progressCounter">Vui lòng không đóng trình duyệt trong quá trình này.</small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL 3: XÁC NHẬN HOÀN TÁC (RESTORE MODAL) -->
+  <!-- ========================================================================= -->
+  <div class="modal fade" id="restoreModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content border-0 shadow-lg">
+        <div class="modal-header bg-danger text-white">
+          <h5 class="modal-title fw-bold">
+            <i class="bi bi-arrow-counterclockwise me-2"></i> Xác Nhận Hoàn Tác Chuyển Lớp
+          </h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-4">
+          <p>Bạn có chắc chắn muốn hoàn tác đợt chuyển lớp sau đây?</p>
+          <div class="card bg-light border p-3 mb-3">
+            <div>Mã Snapshot: <b class="text-primary font-monospace" id="restoreModalBatchId">--</b></div>
+            <div>Lộ trình hoàn tác: <b id="restoreModalRoute">--</b></div>
+            <div>Số lượng thành viên phục hồi: <b class="text-danger" id="restoreModalCount">0</b></div>
+          </div>
+          <div class="alert alert-warning py-2 mb-0 small">
+            <i class="bi bi-exclamation-triangle-fill me-1"></i>
+            Hành động này sẽ cập nhật lại thông tin lớp cũ trên PostgreSQL và đồng bộ khôi phục AliasID cũ trên HANET Cloud.
+          </div>
+        </div>
+        <div class="modal-footer bg-light">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Đóng</button>
+          <button type="button" class="btn btn-danger px-4 fw-semibold" id="btnConfirmRestore">
+            <i class="bi bi-arrow-counterclockwise me-1"></i> Xác Nhận Phục Hồi
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap 5 Bundle JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <!-- Client-Side Transfer Application Script -->
+  <script>
+    // State management
+    const state = {
+      left: {
+        className: '',
+        members: [],
+        filtered: [],
+        selected: new Set()
+      },
+      right: {
+        className: '',
+        members: [],
+        filtered: [],
+        selected: new Set()
+      },
+      currentTransfer: {
+        fromClass: '',
+        toClass: '',
+        personIds: [],
+        previewData: null
+      },
+      activeRestoreBatchId: null
+    };
+
+    // DOM Elements
+    const el = {
+      leftSelect: document.getElementById('leftClassSelect'),
+      rightSelect: document.getElementById('rightClassSelect'),
+      leftSearch: document.getElementById('leftSearchInput'),
+      rightSearch: document.getElementById('rightSearchInput'),
+      leftSelectAll: document.getElementById('leftSelectAll'),
+      rightSelectAll: document.getElementById('rightSelectAll'),
+      leftList: document.getElementById('leftMemberList'),
+      rightList: document.getElementById('rightMemberList'),
+      leftSelectedCount: document.getElementById('leftSelectedCount'),
+      leftTotalCount: document.getElementById('leftTotalCount'),
+      rightSelectedCount: document.getElementById('rightSelectedCount'),
+      rightTotalCount: document.getElementById('rightTotalCount'),
+      btnTransferRight: document.getElementById('btnTransferRight'),
+      btnTransferLeft: document.getElementById('btnTransferLeft'),
+      toast: document.getElementById('liveToast'),
+      toastMessage: document.getElementById('toastMessage')
+    };
+
+    // Bootstrap Instances
+    const bsToast = new bootstrap.Toast(el.toast);
+    const preTransferModal = new bootstrap.Modal(document.getElementById('preTransferModal'));
+    const progressModal = new bootstrap.Modal(document.getElementById('progressModal'));
+    const restoreModal = new bootstrap.Modal(document.getElementById('restoreModal'));
+
+    // Hiển thị Toast
+    function showToast(message, type = 'primary') {
+      el.toast.className = `toast align-items-center text-white border-0 shadow-lg bg-${type}`;
+      el.toastMessage.innerHTML = `<i class="bi bi-${type === 'success' ? 'check-circle-fill' : type === 'danger' ? 'exclamation-octagon-fill' : 'info-circle-fill'} fs-5 me-2"></i><span>${message}</span>`;
+      bsToast.show();
+    }
+
+    // Vô hiệu hóa lớp trùng bên đối diện
+    function syncSelectOptions() {
+      const leftVal = el.leftSelect.value;
+      const rightVal = el.rightSelect.value;
+
+      Array.from(el.rightSelect.options).forEach(opt => {
+        if (!opt.value) return;
+        opt.disabled = (opt.value === leftVal);
+      });
+
+      Array.from(el.leftSelect.options).forEach(opt => {
+        if (!opt.value) return;
+        opt.disabled = (opt.value === rightVal);
+      });
+    }
+
+    // Tải danh sách thành viên của một lớp
+    async function loadMembers(side, className) {
+      const listEl = side === 'left' ? el.leftList : el.rightList;
+      const searchEl = side === 'left' ? el.leftSearch : el.rightSearch;
+      const selectAllEl = side === 'left' ? el.leftSelectAll : el.rightSelectAll;
+      const totalCountEl = side === 'left' ? el.leftTotalCount : el.rightTotalCount;
+      const selectedCountEl = side === 'left' ? el.leftSelectedCount : el.rightSelectedCount;
+
+      listEl.innerHTML = `
+        <div class="empty-state">
+          <div class="spinner-border text-primary mb-2" role="status"></div>
+          <div>Đang tải thành viên lớp ${className}...</div>
+        </div>
+      `;
+
+      try {
+        const res = await fetch(`/api/transfers/members?className=${encodeURIComponent(className)}`);
+        const json = await res.json();
+
+        if (!json.success) {
+          throw new Error(json.message || 'Không thể tải danh sách');
+        }
+
+        state[side].className = className;
+        state[side].members = json.members || [];
+        state[side].filtered = [...state[side].members];
+        state[side].selected.clear();
+
+        searchEl.disabled = false;
+        searchEl.value = '';
+        selectAllEl.disabled = false;
+        selectAllEl.checked = false;
+
+        totalCountEl.textContent = state[side].members.length;
+        selectedCountEl.textContent = '0';
+
+        renderMemberList(side);
+        updateButtonsState();
+      } catch (err) {
+        listEl.innerHTML = `
+          <div class="empty-state text-danger">
+            <i class="bi bi-exclamation-triangle display-6 d-block mb-2"></i>
+            <span>Lỗi: ${err.message}</span>
+          </div>
+        `;
+        showToast(err.message, 'danger');
+      }
+    }
+
+    // Render danh sách thành viên trong Pane
+    function renderMemberList(side) {
+      const listEl = side === 'left' ? el.leftList : el.rightList;
+      const members = state[side].filtered;
+
+      if (members.length === 0) {
+        listEl.innerHTML = `
+          <div class="empty-state">
+            <i class="bi bi-people display-6 d-block mb-2 text-muted"></i>
+            <span>Không tìm thấy thành viên nào</span>
+          </div>
+        `;
+        return;
+      }
+
+      listEl.innerHTML = members.map(m => {
+        const isSelected = state[side].selected.has(m.id);
+        const avatarHtml = m.face_url 
+          ? `<img src="${m.face_url}" class="avatar-sm" alt="${m.name}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'avatar-placeholder\\'>${(m.name||'U').charAt(0).toUpperCase()}</div>'">`
+          : `<div class="avatar-placeholder">${(m.name || 'U').charAt(0).toUpperCase()}</div>`;
+        
+        const badgeSync = m.alias_id
+          ? `<span class="badge bg-success-subtle text-success border border-success-subtle badge-sync"><i class="bi bi-cloud-check me-1"></i>HANET Sync</span>`
+          : `<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle badge-sync"><i class="bi bi-database me-1"></i>DB Only</span>`;
+
+        return `
+          <div class="member-item ${isSelected ? 'selected' : ''}" data-id="${m.id}" data-side="${side}">
+            <input type="checkbox" class="form-check-input" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); toggleSelectMember('${side}', ${m.id})">
+            ${avatarHtml}
+            <div class="flex-grow-1 text-truncate">
+              <div class="fw-bold text-dark text-truncate">${m.name}</div>
+              <div class="small text-muted font-monospace text-truncate">
+                ${m.alias_id ? m.alias_id : 'Chưa có Face ID'}
+              </div>
+            </div>
+            <div>${badgeSync}</div>
+          </div>
+        `;
+      }).join('');
+
+      // Gắn sự kiện click dòng
+      listEl.querySelectorAll('.member-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const memberId = parseInt(item.getAttribute('data-id'));
+          toggleSelectMember(side, memberId);
+        });
+      });
+    }
+
+    // Toggle chọn một thành viên
+    function toggleSelectMember(side, id) {
+      if (state[side].selected.has(id)) {
+        state[side].selected.delete(id);
+      } else {
+        state[side].selected.add(id);
+      }
+
+      const selectedCountEl = side === 'left' ? el.leftSelectedCount : el.rightSelectedCount;
+      const selectAllEl = side === 'left' ? el.leftSelectAll : el.rightSelectAll;
+      
+      selectedCountEl.textContent = state[side].selected.size;
+      selectAllEl.checked = (state[side].filtered.length > 0 && state[side].selected.size === state[side].filtered.length);
+
+      renderMemberList(side);
+      updateButtonsState();
+    }
+
+    // Toggle chọn tất cả
+    function toggleSelectAll(side) {
+      const selectAllEl = side === 'left' ? el.leftSelectAll : el.rightSelectAll;
+      const isChecked = selectAllEl.checked;
+
+      if (isChecked) {
+        state[side].filtered.forEach(m => state[side].selected.add(m.id));
+      } else {
+        state[side].selected.clear();
+      }
+
+      const selectedCountEl = side === 'left' ? el.leftSelectedCount : el.rightSelectedCount;
+      selectedCountEl.textContent = state[side].selected.size;
+
+      renderMemberList(side);
+      updateButtonsState();
+    }
+
+    // Tìm kiếm tức thì trong Pane
+    function filterMembers(side, term) {
+      const q = term.trim().toLowerCase();
+      state[side].filtered = state[side].members.filter(m => {
+        const nameMatch = (m.name || '').toLowerCase().includes(q);
+        const aliasMatch = (m.alias_id || '').toLowerCase().includes(q);
+        return nameMatch || aliasMatch;
+      });
+
+      const totalCountEl = side === 'left' ? el.leftTotalCount : el.rightTotalCount;
+      totalCountEl.textContent = state[side].filtered.length;
+
+      const selectAllEl = side === 'left' ? el.leftSelectAll : el.rightSelectAll;
+      selectAllEl.checked = (state[side].filtered.length > 0 && state[side].selected.size === state[side].filtered.length);
+
+      renderMemberList(side);
+    }
+
+    // Cập nhật trạng thái bật/tắt nút chuyển lớp trung tâm
+    function updateButtonsState() {
+      const leftSelected = state.left.selected.size > 0;
+      const rightSelected = state.right.selected.size > 0;
+      const leftClass = state.left.className;
+      const rightClass = state.right.className;
+
+      // Nút sang phải: Cần có thành viên được chọn bên trái VÀ lớp bên phải đã chọn
+      el.btnTransferRight.disabled = !(leftSelected && rightClass && leftClass !== rightClass);
+
+      // Nút sang trái: Cần có thành viên được chọn bên phải VÀ lớp bên trái đã chọn
+      el.btnTransferLeft.disabled = !(rightSelected && leftClass && leftClass !== rightClass);
+    }
+
+    // Mở Pre-Transfer Confirmation Modal
+    async function openTransferPreview(fromSide, toSide) {
+      const fromClass = state[fromSide].className;
+      const toClass = state[toSide].className;
+      const personIds = Array.from(state[fromSide].selected);
+
+      if (!fromClass || !toClass || personIds.length === 0) {
+        showToast('Vui lòng chọn lớp và ít nhất một thành viên cần chuyển', 'warning');
+        return;
+      }
+
+      state.currentTransfer = {
+        fromClass,
+        toClass,
+        personIds,
+        previewData: null
+      };
+
+      document.getElementById('modalFromClass').textContent = fromClass;
+      document.getElementById('modalToClass').textContent = toClass;
+      document.getElementById('modalTotalCount').textContent = personIds.length;
+      document.getElementById('modalDbOnlyCount').textContent = '...';
+      document.getElementById('modalHanetSyncCount').textContent = '...';
+      document.getElementById('modalPreviewTableBody').innerHTML = `
+        <tr><td colspan="5" class="text-center py-3"><div class="spinner-border spinner-border-sm text-primary"></div> Đang kiểm tra tác động...</td></tr>
+      `;
+
+      preTransferModal.show();
+
+      try {
+        const res = await fetch('/api/transfers/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fromClass, toClass, personIds })
+        });
+        const json = await res.json();
+
+        if (!json.success) {
+          throw new Error(json.message || 'Không thể xem trước tác động');
+        }
+
+        const data = json.data;
+        state.currentTransfer.previewData = data;
+
+        document.getElementById('modalTotalCount').textContent = data.total;
+        document.getElementById('modalDbOnlyCount').textContent = data.databaseOnlyCount;
+        document.getElementById('modalHanetSyncCount').textContent = data.hanetSyncCount;
+
+        const tableRows = data.members.map((m, idx) => `
+          <tr>
+            <td>${idx + 1}</td>
+            <td class="fw-semibold">${m.name}</td>
+            <td class="font-monospace small text-muted">${m.current_alias || '<i>Chưa có</i>'}</td>
+            <td class="font-monospace small text-primary fw-bold">${m.new_alias || '<span class="text-muted">Giữ nguyên NULL</span>'}</td>
+            <td>
+              ${m.type === 'HANET_SYNC' 
+                ? '<span class="badge bg-success-subtle text-success border">HANET Sync</span>' 
+                : '<span class="badge bg-secondary-subtle text-secondary border">DB Only</span>'}
+            </td>
+          </tr>
+        `).join('');
+
+        document.getElementById('modalPreviewTableBody').innerHTML = tableRows;
+      } catch (err) {
+        document.getElementById('modalPreviewTableBody').innerHTML = `
+          <tr><td colspan="5" class="text-center text-danger py-3">Lỗi: ${err.message}</td></tr>
+        `;
+        showToast(err.message, 'danger');
+      }
+    }
+
+    // Thực thi chuyển lớp thật
+    async function executeTransfer() {
+      const { fromClass, toClass, personIds } = state.currentTransfer;
+      if (!fromClass || !toClass || personIds.length === 0) return;
+
+      preTransferModal.hide();
+
+      document.getElementById('progressTitle').textContent = `Đang chuyển từ ${fromClass} sang ${toClass}`;
+      document.getElementById('progressSubtitle').textContent = `Đang đồng bộ Saga Workflow cho ${personIds.length} thành viên...`;
+      progressModal.show();
+
+      try {
+        const res = await fetch('/api/transfers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fromClass, toClass, personIds })
+        });
+        const json = await res.json();
+
+        progressModal.hide();
+
+        if (!json.success) {
+          throw new Error(json.message || 'Chuyển lớp thất bại');
+        }
+
+        showToast(json.message || 'Chuyển lớp thành công!', 'success');
+
+        // Làm mới cả hai danh sách lớp
+        await Promise.all([
+          loadMembers('left', state.left.className),
+          loadMembers('right', state.right.className)
+        ]);
+
+        // Cập nhật lại lịch sử sau 500ms
+        setTimeout(() => {
+          window.location.reload();
+        }, 1200);
+      } catch (err) {
+        progressModal.hide();
+        showToast(`Lỗi: ${err.message}`, 'danger');
+      }
+    }
+
+    // Mở modal hoàn tác
+    function openRestoreModal(batchId, fromClass, toClass, totalCount) {
+      state.activeRestoreBatchId = batchId;
+      document.getElementById('restoreModalBatchId').textContent = batchId;
+      document.getElementById('restoreModalRoute').textContent = `${toClass} ➔ ${fromClass} (Khôi phục lớp cũ)`;
+      document.getElementById('restoreModalCount').textContent = `${totalCount} thành viên`;
+      restoreModal.show();
+    }
+
+    // Thực thi hoàn tác (Restore)
+    async function executeRestore() {
+      const batchId = state.activeRestoreBatchId;
+      if (!batchId) return;
+
+      restoreModal.hide();
+
+      document.getElementById('progressTitle').textContent = `Đang Hoàn Tác Điểm Phục Hồi...`;
+      document.getElementById('progressSubtitle').textContent = `Đang khôi phục lại Alias ID trên HANET Cloud và PostgreSQL...`;
+      progressModal.show();
+
+      try {
+        const res = await fetch(`/api/transfers/${encodeURIComponent(batchId)}/restore`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const json = await res.json();
+
+        progressModal.hide();
+
+        if (!json.success) {
+          throw new Error(json.message || 'Hoàn tác thất bại');
+        }
+
+        showToast(json.message || 'Hoàn tác thành công!', 'success');
+
+        // Tải lại trang sau khi hoàn tác
+        setTimeout(() => {
+          window.location.reload();
+        }, 1200);
+      } catch (err) {
+        progressModal.hide();
+        showToast(`Lỗi hoàn tác: ${err.message}`, 'danger');
+      }
+    }
+
+    // Event Listeners
+    el.leftSelect.addEventListener('change', (e) => {
+      syncSelectOptions();
+      loadMembers('left', e.target.value);
+    });
+
+    el.rightSelect.addEventListener('change', (e) => {
+      syncSelectOptions();
+      loadMembers('right', e.target.value);
+    });
+
+    el.leftSearch.addEventListener('input', (e) => filterMembers('left', e.target.value));
+    el.rightSearch.addEventListener('input', (e) => filterMembers('right', e.target.value));
+
+    el.leftSelectAll.addEventListener('change', () => toggleSelectAll('left'));
+    el.rightSelectAll.addEventListener('change', () => toggleSelectAll('right'));
+
+    el.btnTransferRight.addEventListener('click', () => openTransferPreview('left', 'right'));
+    el.btnTransferLeft.addEventListener('click', () => openTransferPreview('right', 'left'));
+
+    document.getElementById('btnConfirmTransfer').addEventListener('click', executeTransfer);
+    document.getElementById('btnConfirmRestore').addEventListener('click', executeRestore);
+
+    // Initial setup
+    syncSelectOptions();
+  </script>
+</body>
+</html>
