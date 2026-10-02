@@ -268,21 +268,28 @@
 
       <!-- CỘT ĐIỀU KHIỂN TRUNG TÂM (CENTER CONTROLS) -->
       <div class="col-lg-2 d-flex align-items-center justify-content-center">
-        <div class="center-controls w-100">
-          <button class="btn btn-primary btn-transfer" id="btnTransferRight" disabled>
-            <span>Sang Phải</span>
-            <i class="bi bi-arrow-right-circle-fill fs-5"></i>
+        <div class="center-controls d-flex flex-column align-items-center gap-3">
+          <!-- Nút chuyển sang phải -->
+          <button class="btn btn-primary rounded-circle shadow-sm p-3 d-flex align-items-center justify-content-center" 
+                  id="btnTransferRight" 
+                  disabled 
+                  title="Chuyển sang phải"
+                  style="width: 52px; height: 52px;">
+            <i class="bi bi-arrow-right fs-4"></i>
           </button>
 
-          <div class="text-center my-2">
-            <span class="badge bg-light text-muted border px-2 py-1 small">
-              <i class="bi bi-shield-check text-success me-1"></i>Saga Flow
-            </span>
-          </div>
+          <!-- Badge trạng thái Saga Flow tối giản -->
+          <span class="badge bg-light text-muted border px-2 py-1 small" title="Cơ chế giao dịch Saga an toàn">
+            <i class="bi bi-shield-check text-success"></i>
+          </span>
 
-          <button class="btn btn-primary btn-transfer" id="btnTransferLeft" disabled>
-            <i class="bi bi-arrow-left-circle-fill fs-5"></i>
-            <span>Sang Trái</span>
+          <!-- Nút chuyển sang trái -->
+          <button class="btn btn-primary rounded-circle shadow-sm p-3 d-flex align-items-center justify-content-center" 
+                  id="btnTransferLeft" 
+                  disabled 
+                  title="Chuyển sang trái"
+                  style="width: 52px; height: 52px;">
+            <i class="bi bi-arrow-left fs-4"></i>
           </button>
         </div>
       </div>
