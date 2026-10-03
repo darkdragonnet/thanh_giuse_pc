@@ -155,22 +155,48 @@ class HanetService {
     }
   }
 
-  // Cập nhật thông tin nhân sự (Name, AliasID, Title, DepartmentID)
-  async updateInfo(data) {
-    const cleanPersonID = String(data.personID || data.id || '').trim();
-    const cleanName = String(data.name || '').trim();
-    const cleanAliasID = String(data.aliasID || '').trim().replace(/\s+/g, '_');
-    const cleanTitle = String(data.title || 'Nhân viên').trim();
-    const cleanDeptID = String(data.departmentID || '').trim();
-    const departmentID = (!cleanDeptID || cleanDeptID === '0' || cleanDeptID === 'undefined' || cleanDeptID === 'null')
+  /**
+   * Cập nhật thông tin nhân sự trên HANET Cloud theo RULE-004
+   * @param {string|Object} personID - Cloud Person ID hoặc Object dữ liệu
+   * @param {string} name - Họ và tên
+   * @param {string} aliasID - Mã Alias ID
+   * @param {string} departmentID - Mã phòng ban HANET (Bắt buộc không được null/trống)
+   * @param {string} title - Chức danh (mặc định: 'Học Sinh')
+   * @returns {Promise<Object>}
+   */
+  async updatePerson(personID, name, aliasID, departmentID, title = 'Học Sinh') {
+    let pId, pName, pAlias, pDept, pTitle;
+
+    if (typeof personID === 'object' && personID !== null) {
+      pId = personID.personID || personID.id || personID.person_id;
+      pName = personID.name;
+      pAlias = personID.aliasID || personID.alias_id;
+      pDept = personID.departmentID || personID.department_id;
+      pTitle = personID.title;
+    } else {
+      pId = personID;
+      pName = name;
+      pAlias = aliasID;
+      pDept = departmentID;
+      pTitle = title;
+    }
+
+    const cleanPersonID = String(pId || '').trim();
+    const cleanName = String(pName || '').trim();
+    const cleanAliasID = String(pAlias || '').trim().replace(/\s+/g, '_');
+    const cleanTitle = String(pTitle || 'Học Sinh').trim();
+    const cleanDeptID = String(pDept || '').trim();
+
+    // Đảm bảo departmentID không được để trống hoặc null
+    const finalDeptID = (!cleanDeptID || cleanDeptID === '0' || cleanDeptID === 'undefined' || cleanDeptID === 'null')
       ? '990653'
       : cleanDeptID;
 
     const payload = {
-      placeID: String(data.placeID || this.placeId).trim(),
+      placeID: String(this.placeId).trim(),
       name: cleanName,
       title: cleanTitle,
-      departmentID: departmentID
+      departmentID: String(finalDeptID)
     };
 
     if (cleanPersonID) {
@@ -180,17 +206,52 @@ class HanetService {
       payload.aliasID = cleanAliasID;
     }
 
-    return this.postWithToken('/person/updateInfo', payload);
+    try {
+      // Ưu tiên gọi /person/updateInfo (chuẩn cập nhật thông tin HANET Cloud)
+      const res = await this.postWithToken('/person/updateInfo', payload);
+      if (res && (res.returnCode === 1 || res.returnCode === '1')) {
+        return res;
+      }
+
+      // Nếu trả về mã lỗi -1, thử biến thể endpoint /person/update
+      if (res && (res.returnCode === -1 || res.returnCode === '-1')) {
+        console.warn('[HanetService] /person/updateInfo trả về -1, thử endpoint /person/update...');
+        const altRes = await this.postWithToken('/person/update', payload).catch(() => null);
+        if (altRes && (altRes.returnCode === 1 || altRes.returnCode === '1')) {
+          return altRes;
+        }
+      }
+
+      return res;
+    } catch (err) {
+      console.error('[HanetService updatePerson Error]:', err.response?.data || err.message);
+      // Fallback nếu có aliasID
+      if (cleanAliasID) {
+        try {
+          const fallbackPayload = {
+            placeID: String(this.placeId).trim(),
+            aliasID: cleanAliasID,
+            name: cleanName,
+            title: cleanTitle,
+            departmentID: String(finalDeptID)
+          };
+          return await this.postWithToken('/person/updateInfo', fallbackPayload);
+        } catch (fallbackErr) {
+          throw fallbackErr;
+        }
+      }
+      throw err;
+    }
   }
 
-  // Alias hỗ trợ tương thích với /person/update hoặc updatePerson
-  async updatePerson(data) {
-    return this.updateInfo(data);
+  // Alias hỗ trợ tương thích với updateInfo
+  async updateInfo(data) {
+    return this.updatePerson(data);
   }
 
   // Helper cập nhật thông tin nhân sự theo tham số rời
   async updatePersonInfo(personID, name, title, aliasID, departmentID) {
-    return this.updateInfo({ personID, name, title, aliasID, departmentID });
+    return this.updatePerson(personID, name, aliasID, departmentID, title);
   }
 
   // Cập nhật Face ID cho nhân sự qua faceUrl

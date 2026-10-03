@@ -10,6 +10,7 @@ const { RedisStore } = require('connect-redis');
 const { createClient } = require('redis');
 const dotenv = require('dotenv');
 const imageService = require('./services/imageService');
+const queueService = require('./services/queueService');
 const defaultAuthMiddleware = require('./middlewares/authMiddleware');
 
 dotenv.config();
@@ -27,12 +28,20 @@ if (gcTimer && typeof gcTimer.unref === 'function') {
   gcTimer.unref();
 }
 
+// Khởi chạy Outbox Dispatcher định kỳ mỗi 30 giây phục hồi các yêu cầu chưa được nạp vào Queue
+const outboxTimer = setInterval(() => {
+  queueService.dispatchPendingOutbox().catch(() => {});
+}, 30 * 1000);
+if (outboxTimer && typeof outboxTimer.unref === 'function') {
+  outboxTimer.unref();
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Khởi tạo Redis Client cho Express Session
 const redisClient = createClient({
-  url: `redis://${process.env.REDIS_HOST || 'redis'}:${process.env.REDIS_PORT || 6379}/${process.env.REDIS_DB || 4}`
+  url: `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}/${process.env.REDIS_DB || 4}`
 });
 
 redisClient.on('error', (err) => console.error('[Redis Client Error]', err.message));
@@ -67,34 +76,22 @@ app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.static(path.join(__dirname, '../public')));
 
-// Middleware xử lý fallback cho ảnh bị dọn dẹp sau 30s (RULE-022)
+// Tuyệt đối KHÔNG trả ảnh mặc định hoặc SVG 200 khi thiếu file ảnh; phải trả 404 chính xác
 app.get('/uploads/:filename', (req, res) => {
   const filePath = path.join(__dirname, '../uploads', req.params.filename);
 
-  // 1. File vẫn tồn tại (trong khoảng 30s đầu)
   if (fs.existsSync(filePath)) {
     return res.sendFile(filePath);
   }
 
-  // 2. File đã bị dọn dẹp (RULE-022) -> Trả về ảnh mặc định nếu có
-  const defaultAvatarPath = path.join(__dirname, '../public/images/default-avatar.png');
-  if (fs.existsSync(defaultAvatarPath)) {
-    return res.sendFile(defaultAvatarPath);
-  }
-
-  // 3. Fallback cuối cùng: Trả về 1 ảnh SVG 1x1 trong suốt với HTTP 200 (Tránh 404 hoàn toàn)
-  res.setHeader('Content-Type', 'image/svg+xml');
-  return res.send(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1">
-      <rect width="1" height="1" fill="transparent"/>
-    </svg>
-  `);
+  return res.status(404).json({ error: 'Image file not found' });
 });
 
 // Middleware biến toàn cục cho Views
 app.use((req, res, next) => {
   res.locals.success = req.flash('success');
   res.locals.error = req.flash('error');
+  res.locals.warning = req.flash('warning');
   res.locals.currentPath = req.path;
   res.locals.user = req.session?.user || null;
   next();
@@ -113,7 +110,7 @@ app.get('/', (req, res) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', architecture: 'Cloud-First (No-DB)' });
+  res.status(200).json({ status: 'ok', architecture: 'Postgres-First' });
 });
 
 // Mount Routes
@@ -125,3 +122,5 @@ app.use('/', personRoutes);
 app.listen(PORT, () => {
   console.log(`🚀 Server dang chay tai: http://localhost:${PORT}`);
 });
+
+module.exports = app;

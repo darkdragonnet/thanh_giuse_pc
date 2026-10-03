@@ -21,7 +21,9 @@ router.get('/login', authController.showLogin);
 router.post('/login', authController.handleLogin);
 router.get('/logout', authController.handleLogout);
 
-// Đăng ký theo lớp / file danh mục CSV (Tối ưu Zalo WebView)
+// Đăng ký theo lớp / danh mục (Tối ưu Zalo WebView)
+router.get('/register/status/:requestId', personController.checkRegistrationStatus);
+router.get('/api/register/status/:requestId', personController.checkRegistrationStatus);
 router.get('/register/:file_name', personController.showRegisterForm);
 router.get('/register', personController.renderRegisterForm);
 router.post('/register/:file_name', upload.any(), auditLog('REGISTER_FACE_BY_FILE'), personController.handleRegister);
@@ -41,14 +43,14 @@ router.get('/edit/:personID', authorize([ROLES.GROUP_LEADER, ROLES.ADMIN, ROLES.
 router.put('/update/:personID', authorize([ROLES.GROUP_LEADER, ROLES.ADMIN, ROLES.SUPER_ADMIN]), upload.any(), auditLog('UPDATE_PERSON'), personController.update);
 router.post('/update/:personID', authorize([ROLES.GROUP_LEADER, ROLES.ADMIN, ROLES.SUPER_ADMIN]), upload.any(), auditLog('UPDATE_PERSON'), personController.update);
 
-// Xóa nhân sự khỏi Cloud và CSV
+// Xóa nhân sự khỏi Cloud và Database
 router.post('/admin/person/delete', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), auditLog('DELETE_PERSON'), personController.delete);
 router.delete('/delete/:personID', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), auditLog('DELETE_PERSON'), personController.delete);
 router.post('/delete/:personID', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), auditLog('DELETE_PERSON'), personController.delete);
 router.delete('/person/delete/:personID', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), auditLog('DELETE_PERSON'), personController.delete);
 router.post('/person/delete/:personID', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), auditLog('DELETE_PERSON'), personController.delete);
 
-// Đồng bộ Cloud về CSV
+// Đồng bộ Cloud về PostgreSQL Database
 router.post('/admin/sync/cloud-to-csv', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), auditLog('TRIGGER_CLOUD_SYNC'), personController.triggerSync);
 
 // Quản lý Dead Letter Queue (DLQ)

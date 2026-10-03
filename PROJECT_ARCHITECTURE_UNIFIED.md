@@ -164,9 +164,46 @@ Hệ thống vận hành trên cơ sở dữ liệu quan hệ PostgreSQL 16 vớ
 ### 4.3 RULE-003: Tính Toàn Vẹn Giao Dịch (ACID Database Transactions)
 - Các thao tác thay đổi nhiều bảng (Đổi tên lớp, chuyển lớp, cấu trúc lại phòng ban) bắt buộc bọc trong Transaction (`BEGIN ... COMMIT / ROLLBACK`).
 
-### 4.4 RULE-004: Chuẩn Hóa Định Danh `alias_id` 3 Phần
-- Định dạng: `[MÃ_PHÒNG_BAN]_[TÊN_LỚP_KHÔNG_DẤU_VIẾT_HOA]_[MÃ_4_KÝ_TỰ_A-Z0-9]`.
-- Ví dụ: `TN_THEMSUC1A_8XI8`, `LM_DMHCCC_4BDI`, `GT_GIOITRE_9M1N`.
+### 4.4 RULE-004 (Mở rộng): Chuẩn Hóa Định Danh `alias_id` 3 Phần & Phân Định Source of Truth
+
+#### 4.4.1. Phân định Source of Truth (Ưu tiên tuyệt đối hai chiều)
+
+| Trường | Source of Truth | Chiều đồng bộ | Hành vi khi xung đột |
+| :--- | :---: | :--- | :--- |
+| `alias_id` | **PostgreSQL** | Postgres → HANET | HANET cập nhật theo Postgres |
+| `name`, `class_name`, `department_id`, `title` | **PostgreSQL** | Postgres → HANET | HANET cập nhật theo Postgres |
+| `person_id` | **HANET Cloud** | HANET → Postgres | Postgres ghi đè theo HANET |
+| `face_url` | **HANET Cloud** | HANET → Postgres | Postgres ghi đè theo HANET |
+
+#### 4.4.2. Định dạng chuẩn `alias_id`
+```
+[MÃ_PHÒNG_BAN]_[TÊN_LỚP_KHÔNG_DẤU_VIẾT_HOA]_[TOKEN_4_KÝ_TỰ]
+```
+- **MÃ_PHÒNG_BAN:** `TN` (Thiếu Nhi), `LM` (Legiô Mariae), `GT` (Giới Trẻ), `GTR` (Gia Trưởng), `HM` (Hiền Mẫu).
+- **TÊN_LỚP:** Viết HOA, loại bỏ toàn bộ dấu tiếng Việt, khoảng trắng và `_`.
+- **TOKEN_4_KÝ_TỰ:** Chuỗi ngẫu nhiên `[A-Z0-9]`, đảm bảo UNIQUE toàn cục.
+- **Ví dụ:** `TN_THEMSUC1C_YZBW`, `LM_DMHCCC_4BDI`, `GT_GIOITRE_9M1N`.
+
+#### 4.4.3. Quy tắc xử lý dữ liệu `PENDING`
+Trong bảng `persons`, các bản ghi import khung tên có:
+- `alias_id IS NULL`
+- `sync_status = 'PENDING'`
+- Chưa có `person_id` / `face_url`
+
+**Bắt buộc:** Toàn bộ bản ghi này phải được tự động sinh mã theo RULE-004 qua 2 cơ chế:
+1. **Batch Backfill Script** (`generate_missing_aliases.js`) — chạy một lần để xử lý dữ liệu tồn đọng.
+2. **Runtime Trigger** — trong `dbClassService.addMember()` và `personController.handleRegister()` để không phát sinh bản ghi NULL mới.
+
+#### 4.4.4. Triết lý Zero-Friction Registration
+- Toàn bộ khung dữ liệu (`name`, `class_name`, `department_id`, `title`, `alias_id`) đã được chuẩn bị sẵn từ PostgreSQL.
+- Người dùng mở link lớp `/register/:class_name` → hệ thống render danh sách học sinh với `alias_id` đã có.
+- **Người dùng chỉ cần chọn tên + chụp/tải ảnh khuôn mặt** — KHÔNG phải nhập bất kỳ trường nào.
+- Form đăng ký tự động prefill từ record `PENDING` tương ứng trước khi gửi.
+
+#### 4.4.5. Quy trình cập nhật `alias_id` lên HANET (2 bước bắt buộc)
+1. Gọi `POST /person/updateInfo` với `aliasID`, `name`, `title`, `departmentID`.
+2. Gọi ngay `POST /department/add-person` để khóa phòng ban không bị reset về 0.
+3. Cập nhật `sync_status = 'SYNCED'`, `updated_at = NOW()` vào Postgres.
 
 ### 4.5 RULE-022: Cleanup Delay 30s Policy & DLQ Preservation
 - Ảnh chuẩn hóa `1280x738` (`fit: 'contain'`) xóa sau 30 giây bằng `imageService.cleanupDelayed(imagePath, 30000)` khi job thành công hoặc retry.

@@ -18,14 +18,19 @@ class IdempotencyService {
   }
 
   /**
-   * Sinh khóa Idempotency theo hành động và định danh
+   * Sinh khóa Idempotency theo hành động, định danh và requestId (nếu có)
    * @param {string} action - Hành động (ví dụ: FACE_REGISTER, PERSON_UPDATE)
    * @param {string} identifier - Mã định danh duy nhất (ví dụ: AliasID, PersonID)
+   * @param {string} [requestId] - Mã yêu cầu cụ thể (tùy chọn)
    * @returns {string} Khóa dạng idempotency:hanet:<ACTION>:<IDENTIFIER>
    */
-  generateKey(action, identifier) {
+  generateKey(action, identifier, requestId = '') {
     const cleanAction = String(action || 'DEFAULT').trim().toUpperCase();
     const cleanId = String(identifier || '').trim().toUpperCase();
+    if (requestId) {
+      const cleanReq = String(requestId).trim();
+      return `idempotency:hanet:${cleanAction}:${cleanId}:${cleanReq}`;
+    }
     return `idempotency:hanet:${cleanAction}:${cleanId}`;
   }
 
@@ -61,12 +66,12 @@ class IdempotencyService {
   }
 
   /**
-   * Đánh dấu tác vụ đã hoàn tất thành công (lưu trạng thái trong 24 giờ)
+   * Đánh dấu tác vụ đã hoàn tất thành công (lưu trạng thái trong TTL)
    * @param {string} key - Khóa idempotency
-   * @param {number} ttlSeconds - Thời gian lưu trạng thái (mặc định 86400s = 24h)
+   * @param {number} ttlSeconds - Thời gian lưu trạng thái (mặc định 3600s = 1h)
    * @returns {Promise<boolean>}
    */
-  async markCompleted(key, ttlSeconds = 86400) {
+  async markCompleted(key, ttlSeconds = 3600) {
     try {
       const result = await this.redis.set(key, 'COMPLETED', 'EX', ttlSeconds);
       return result === 'OK';
@@ -87,6 +92,22 @@ class IdempotencyService {
       return true;
     } catch (err) {
       console.error(`[IdempotencyService] Lỗi khi releaseLock cho key ${key}:`, err.message);
+      return false;
+    }
+  }
+
+  /**
+   * Xóa toàn bộ lock liên quan đến alias/person để cho phép nộp yêu cầu thay ảnh mới
+   * @param {string} action
+   * @param {string} identifier
+   */
+  async clearCompleted(action, identifier) {
+    try {
+      const key = this.generateKey(action, identifier);
+      await this.redis.del(key);
+      return true;
+    } catch (err) {
+      console.error(`[IdempotencyService] Lỗi khi clearCompleted:`, err.message);
       return false;
     }
   }

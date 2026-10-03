@@ -20,12 +20,11 @@ class UnrecoverableError extends Error {
   }
 }
 
-// Danh sách mã lỗi vĩnh viễn không thể phục hồi bằng retry tự động (lỗi tham số, lỗi ảnh, lỗi quyền)
+// Danh sách mã lỗi vĩnh viễn không thể phục hồi bằng retry tự động
 const PERMANENT_ERROR_CODES = new Set([
   -1, -1005, -2035, -5005, -5006, -5010, -5011, -9002, -9005, -9006, -9008
 ]);
 
-// Alias tương thích cho NON_RETRIABLE_CODES
 const NON_RETRIABLE_CODES = PERMANENT_ERROR_CODES;
 
 // Map tĩnh phòng ban chuẩn hóa theo quy chuẩn nghiệp vụ
@@ -55,7 +54,6 @@ function generateRandomSuffix(length = 4) {
  * Chuẩn hóa tên lớp cho AliasID:
  * - Viết hoa toàn bộ không dấu
  * - Ghép liền tên khối và phân lớp, loại bỏ hoàn toàn dấu gạch dưới (_) và khoảng trắng
- * Ví dụ: 'ThemSuc_1a' -> 'THEMSUC1A', 'XungToi_2a' -> 'XUNGTOI2A', 'BaoDong_3' -> 'BAODONG3'
  */
 function normalizeClassNameForAlias(className) {
   if (!className) return '';
@@ -65,20 +63,14 @@ function normalizeClassNameForAlias(className) {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd')
     .replace(/Đ/g, 'D')
-    .replace(/[^a-zA-Z0-9]/g, '') // Loại bỏ triệt để _, space, ký tự lạ
+    .replace(/[^a-zA-Z0-9]/g, '')
     .toUpperCase()
     .trim();
 }
 
 /**
  * Chuẩn hóa động Phòng Ban, Chức Vụ và Alias chuẩn HANET Cloud:
- * Định dạng: [MÃ_PHÒNG_BAN]_[TÊN_LỚP]_[MÃ_ĐỊNH_DANH] (3 phần nối bằng 2 dấu gạch dưới)
- * Ví dụ: TN_THEMSUC1A_4BDI, TN_GLV_FNWD, LM_DMHCCC_I2SG
- * @param {string} className Tên lớp / nhóm (VD: GLV, ThemSuc_1a, DMHCCC, GioiTre)
- * @param {string} inputTitle Chức vụ do người dùng nhập hoặc chọn
- * @param {string|number} inputDeptID ID phòng ban truyền vào (nếu có)
- * @param {string} inputAlias Alias truyền vào (nếu có)
- * @returns {Promise<{ departmentName: string, targetDeptID: string, title: string, aliasID: string }>}
+ * BẢO TOÀN aliasID truyền vào nếu đã có, KHÔNG tự ý biến đổi mã hiện hữu.
  */
 async function resolveDepartmentAndAlias(className, inputTitle = '', inputDeptID = '', inputAlias = '') {
   const cleanClass = (className || '').replace(/\.csv$/i, '').trim();
@@ -127,81 +119,34 @@ async function resolveDepartmentAndAlias(className, inputTitle = '', inputDeptID
     }
   }
 
-  // Nếu vẫn chưa có ID, tra cứu theo map tĩnh
   if (!targetDeptID && STATIC_DEPT_MAP[departmentName.toLowerCase()]) {
     targetDeptID = STATIC_DEPT_MAP[departmentName.toLowerCase()];
   }
 
-  // Tra cứu động danh sách phòng ban từ HANET nếu chưa tìm thấy
-  if (!targetDeptID) {
-    try {
-      const deptListRes = await hanetService.getDepartmentList(1, 100);
-      const hits = deptListRes?.data?.hits || (Array.isArray(deptListRes?.data) ? deptListRes.data : []);
-      for (const d of hits) {
-        const dName = (d.name || d.department_name || '').toLowerCase();
-        if (dName.includes(departmentName.toLowerCase()) || departmentName.toLowerCase().includes(dName)) {
-          targetDeptID = String(d.id || d.department_id);
-          departmentName = d.name || d.department_name;
-          break;
-        }
-      }
-    } catch (err) {
-      console.warn('[resolveDepartmentAndAlias] Dynamic department lookup error:', err.message);
-    }
-  }
-
-  // Fallback an toàn
   if (!targetDeptID || targetDeptID === '0') {
     targetDeptID = '990653'; // Mặc định Thiếu Nhi
   }
 
-  // 4. Sinh Tiền Tố Alias & Mã AliasID chuẩn gồm đúng 3 phần: [MÃ_PHÒNG_BAN]_[TÊN_LỚP]_[MÃ_ĐỊNH_DANH]
-  let deptCode = 'TN';
-  let classCode = normalizedClass || 'CHUNG';
-
-  if (normalizedClass === 'GLV') {
-    deptCode = 'TN';
-    classCode = 'GLV';
-  } else if (targetDeptID === '990653' || departmentName.toLowerCase().includes('thiếu nhi')) {
-    deptCode = 'TN';
-    classCode = normalizedClass || 'CHUNG';
-  } else if (targetDeptID === '990730' || departmentName.toLowerCase().includes('mariae')) {
-    deptCode = 'LM';
-    classCode = normalizedClass || 'DMHCCC';
-  } else if (targetDeptID === '990731' || departmentName.toLowerCase().includes('trẻ')) {
-    deptCode = 'GT';
-    classCode = normalizedClass || 'GIOITRE';
-  } else if (departmentName.toLowerCase().includes('gia trưởng')) {
-    deptCode = 'GTR';
-    classCode = normalizedClass || 'GIATRUONG';
-  } else if (departmentName.toLowerCase().includes('hiền mẫu')) {
-    deptCode = 'HM';
-    classCode = normalizedClass || 'HIENMAU';
-  } else {
-    deptCode = departmentName
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/đ/g, 'd').replace(/Đ/g, 'D')
-      .split(/\s+/)
-      .map(w => w.charAt(0).toUpperCase())
-      .join('') || 'PB';
-    classCode = normalizedClass || 'MEMBER';
-  }
-
-  const aliasPrefix = `${deptCode}_${classCode}_`;
-  const randomSuffix = generateRandomSuffix(4);
-
+  // 4. BẢO TOÀN AliasID: Nếu đã có alias truyền vào, giữ nguyên 100% (không đổi suffix, không đổi hoa/thường)
   let finalAliasID = '';
   if (inputAlias && inputAlias.trim()) {
-    let custom = inputAlias.trim().toUpperCase().replace(/\s+/g, '_');
-    const parts = custom.split('_');
-    if (parts.length >= 3 && /^00[0-9A-Z]{2}$/i.test(parts[parts.length - 1])) {
-      parts[parts.length - 1] = randomSuffix;
-      custom = parts.join('_');
-    }
-    finalAliasID = custom;
+    finalAliasID = inputAlias.trim();
   } else {
-    finalAliasID = `${aliasPrefix}${randomSuffix}`;
+    // Chỉ sinh mới nếu hoàn toàn chưa có alias
+    let deptPrefix = 'TN';
+    if (targetDeptID === '990730' || departmentName.toLowerCase().includes('mariae')) {
+      deptPrefix = 'LM';
+    } else if (targetDeptID === '990731' || departmentName.toLowerCase().includes('trẻ')) {
+      deptPrefix = 'GT';
+    } else if (departmentName.toLowerCase().includes('gia trưởng')) {
+      deptPrefix = 'GTR';
+    } else if (departmentName.toLowerCase().includes('hiền mẫu')) {
+      deptPrefix = 'HM';
+    }
+
+    const classCode = normalizedClass || 'CHUNG';
+    const randomSuffix = generateRandomSuffix(4);
+    finalAliasID = `${deptPrefix}_${classCode}_${randomSuffix}`;
   }
 
   return {
@@ -212,53 +157,57 @@ async function resolveDepartmentAndAlias(className, inputTitle = '', inputDeptID
   };
 }
 
-// Cấu hình kết nối Redis DB 4 dùng chung
+// Cấu hình kết nối Redis DB 4
 const redisConfig = {
   host: process.env.REDIS_HOST || 'localhost',
   port: parseInt(process.env.REDIS_PORT || '6379', 10),
   db: parseInt(process.env.REDIS_DB || '4', 10)
 };
 
-// 1. Khởi tạo Hàng Đợi Chính (hanet-registration)
+// 1. Khởi tạo Hàng Đợi Chính
 const registrationQueue = new Queue('hanet-registration', {
   redis: redisConfig,
   defaultJobOptions: {
     attempts: 3,
     backoff: {
       type: 'exponential',
-      delay: 2000 // Thử lại sau 2s, 4s, 8s
+      delay: 2000
     },
-    removeOnComplete: 100, // Giữ 100 job hoàn tất gần nhất
-    removeOnFail: false    // Giữ job thất bại để phân tích và chuyển DLQ
+    removeOnComplete: 100,
+    removeOnFail: false
   }
 });
 
-// Alias tương thích ngược
 const hanetQueue = registrationQueue;
 
-// 2. Khởi tạo Dead Letter Queue (DLQ) lưu trữ các job thất bại vĩnh viễn
+// 2. Khởi tạo Dead Letter Queue (DLQ)
 const deadLetterQueue = new Queue('hanet-registration-dlq', {
   redis: redisConfig
 });
 
-// 3. Lắng nghe sự kiện thất bại của Queue chính để chuyển sang Dead Letter Queue (DLQ)
+// 3. Lắng nghe sự kiện thất bại của Queue chính để chuyển sang DLQ
 registrationQueue.on('failed', async (job, err) => {
   const isUnrecoverable = err && (err.name === 'UnrecoverableError' || err.isUnrecoverable);
   const isMaxAttempts = job.attemptsMade >= job.opts.attempts;
 
   if (isUnrecoverable || isMaxAttempts) {
-    console.error(`🚨 [DLQ Trigger] Job ${job.id} (${job.name}) thất bại vĩnh viễn sau ${job.attemptsMade} lần thử. Chuyển vào DLQ.`);
+    console.error(`🚨 [DLQ Trigger] Job ${job.id} (${job.name}) thất bại vĩnh viễn sau ${job.attemptsMade} lần thử. Chuyển vào DLQ. Lý do: ${err.message}`);
 
-    // Bảo toàn file ảnh khi job đi vào DLQ
-    const imagePath = job.data?.imagePath;
-    if (imagePath && fs.existsSync(imagePath)) {
+    let imagePath = job.data?.imagePath;
+    let dlqPath = imagePath;
+
+    // Bảo toàn file ảnh khi job đi vào DLQ bằng cách đổi tên sang dlq_...
+    if (imagePath && fs.existsSync(imagePath) && !path.basename(imagePath).startsWith('dlq_')) {
       try {
-        const dlqPath = path.join(
+        dlqPath = path.join(
           path.dirname(imagePath),
           'dlq_' + path.basename(imagePath)
         );
         fs.renameSync(imagePath, dlqPath);
-        console.log('🛡️ [DLQ Preserved] Đã lưu ảnh lỗi để kiểm tra:', dlqPath);
+        console.log('🛡️ [DLQ Preserved] Đã lưu ảnh lỗi vào đường dẫn bảo toàn:', dlqPath);
+        // Cập nhật lại đường dẫn ảnh trong job.data
+        job.data.imagePath = dlqPath;
+        job.data.imageFilename = path.basename(dlqPath);
       } catch (renameErr) {
         console.warn('⚠️ [DLQ Preserved Warning] Lỗi đổi tên ảnh lỗi:', renameErr.message);
       }
@@ -268,7 +217,11 @@ registrationQueue.on('failed', async (job, err) => {
       await deadLetterQueue.add('dead_letter_job', {
         originalJobId: job.id,
         jobName: job.name,
-        jobData: job.data,
+        jobData: {
+          ...job.data,
+          imagePath: dlqPath,
+          imageFilename: path.basename(dlqPath || '')
+        },
         failedReason: err.message,
         failedCode: err.code || null,
         isUnrecoverable: !!isUnrecoverable,
@@ -280,13 +233,26 @@ registrationQueue.on('failed', async (job, err) => {
       });
       console.log(`✅ [DLQ Stored] Đã lưu trữ Job ${job.id} vào deadLetterQueue thành công.`);
 
-      // Cập nhật trạng thái FAILED trong PostgreSQL persons
-      if (job.data?.aliasID || job.data?.personID) {
+      // Cập nhật trạng thái FAILED trong PostgreSQL persons và registration_requests
+      const aliasID = job.data?.aliasID;
+      const personID = job.data?.personID;
+      const requestId = job.data?.requestId;
+
+      if (aliasID || personID) {
         await pool.query(
           `UPDATE persons
            SET sync_status = 'FAILED', updated_at = CURRENT_TIMESTAMP
-           WHERE alias_id = $1 OR person_id = $2`,
-          [job.data?.aliasID || null, job.data?.personID || null]
+           WHERE (alias_id = $1 AND sync_status = 'PENDING') OR person_id = $2`,
+          [aliasID || null, personID || null]
+        ).catch(() => {});
+      }
+
+      if (requestId) {
+        await pool.query(
+          `UPDATE registration_requests
+           SET status = 'FAILED', error_message = $1, attempts = $2, updated_at = CURRENT_TIMESTAMP
+           WHERE request_id = $3`,
+          [err.message, job.attemptsMade, requestId]
         ).catch(() => {});
       }
     } catch (dlqErr) {
@@ -306,113 +272,148 @@ function extractPersonIDFromHanet(errorOrRes) {
 
 /**
  * Xử lý Fallback khi khuôn mặt đã tồn tại trên Cloud (Mã lỗi -9007)
+ * Áp dụng Fail-Soft có kiểm soát và xác minh danh tính nghiêm ngặt.
  */
-async function handleFaceExistsFallback(hanetError, memberName, className, jobAliasID) {
+async function handleFaceExistsFallback(hanetError, memberName, className, jobAliasID, faceUrl, finalDeptID, finalTitle, requestId = null) {
   const errData = hanetError?.response?.data || hanetError?.data || hanetError || {};
   const cloudData = errData?.data || errData || {};
   let cloudPersonId = String(cloudData.personID || cloudData.personId || cloudData.id || extractPersonIDFromHanet(hanetError) || '').trim();
   let cloudAliasId = String(cloudData.aliasID || cloudData.alias_id || '').trim();
-  let cloudFaceUrl = String(cloudData.file || cloudData.avatar || cloudData.faceUrl || '').trim();
-
-  // Nếu chưa có cloudPersonId trực tiếp từ payload, tra cứu nhanh qua list trên Cloud
-  if (!cloudPersonId) {
-    try {
-      const listRes = await hanetService.getListByPlace();
-      const allPersons = listRes?.data || [];
-      const match = allPersons.find(p =>
-        (cloudAliasId && p.aliasID === cloudAliasId) ||
-        (jobAliasID && p.aliasID === jobAliasID) ||
-        (p.name && p.name.trim().toLowerCase() === memberName.trim().toLowerCase())
-      );
-      if (match) {
-        cloudPersonId = String(match.personID || match.id || '').trim();
-        cloudAliasId = String(match.aliasID || cloudAliasId || '').trim();
-        cloudFaceUrl = cloudFaceUrl || String(match.avatar || match.faceUrl || '').trim();
-      }
-    } catch (findErr) {
-      console.warn(`[QueueService] Tra cứu nhân sự trùng lặp lỗi:`, findErr.message);
-    }
-  }
+  let cloudFaceUrl = String(cloudData.file || cloudData.avatar || cloudData.faceUrl || faceUrl || '').trim();
 
   console.log(`⚠️ [QueueService] Phát hiện khuôn mặt đã tồn tại trên Cloud (-9007):`);
-  console.log(`   - Cloud PersonID: ${cloudPersonId || '(chưa rõ)'}`);
-  console.log(`   - Cloud AliasID:  ${cloudAliasId || '(chưa rõ)'}`);
+  console.log(`   - Cloud PersonID trích xuất: ${cloudPersonId || '(chưa có trong payload)'}`);
+  console.log(`   - Job AliasID: ${jobAliasID}`);
 
+  // 1. Kiểm tra nếu có cloudPersonId hợp lệ từ HANET payload
   if (cloudPersonId) {
-    // 1. Nếu job sinh ra một alias tạm khác với alias gốc trên Cloud, xóa bản ghi thừa
-    if (jobAliasID && cloudAliasId && jobAliasID !== cloudAliasId) {
-      await pool.query(
-        `DELETE FROM persons 
-         WHERE alias_id = $1 
-           AND (person_id IS NULL OR person_id = '') 
-           AND sync_status = 'PENDING';`,
-        [jobAliasID]
-      ).catch(() => {});
+    try {
+      // 1.1 Đồng bộ cập nhật Face ID mới trên Cloud cho personID này
+      if (faceUrl) {
+        try {
+          await hanetService.updateByFaceUrl({
+            personID: cloudPersonId,
+            faceUrl
+          });
+          console.log(`[Fallback -9007] ✅ Đã cập nhật Face ID mới trên HANET Cloud cho personID: ${cloudPersonId}`);
+        } catch (faceErr) {
+          console.warn(`[Fallback -9007] Cảnh báo cập nhật Face ID:`, faceErr.message);
+        }
+      }
+
+      // 1.2 Đồng bộ cập nhật thông tin tên, chức vụ, aliasID và phòng ban
+      try {
+        await hanetService.updateInfo({
+          personID: cloudPersonId,
+          name: memberName,
+          aliasID: jobAliasID,
+          title: finalTitle,
+          departmentID: finalDeptID
+        });
+      } catch (infoErr) {
+        console.warn(`[Fallback -9007] Cập nhật info cảnh báo:`, infoErr.message);
+      }
+
+      // 1.3 Khóa phòng ban
+      if (finalDeptID && String(finalDeptID) !== '0') {
+        try {
+          await hanetService.addPersonsToDepartment(finalDeptID, cloudPersonId);
+        } catch (deptErr) {}
+      }
+
+      // 1.4 Cập nhật chính xác bản ghi đích trong PostgreSQL
+      const updateResult = await pool.query(
+        `UPDATE persons 
+         SET person_id = $1,
+             face_url = COALESCE(NULLIF($2, ''), face_url),
+             sync_status = 'SYNCED',
+             department_id = COALESCE($3, department_id),
+             title = COALESCE($4, title),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE alias_id = $5`,
+        [cloudPersonId, cloudFaceUrl, finalDeptID || null, finalTitle || null, jobAliasID]
+      );
+
+      if (updateResult.rowCount === 0) {
+        throw new Error(`[Fallback -9007] Không tìm thấy bản ghi PostgreSQL với alias_id ${jobAliasID} để cập nhật.`);
+      }
+
+      // 1.5 Cập nhật registration_requests nếu có
+      if (requestId) {
+        await pool.query(
+          `UPDATE registration_requests
+           SET status = 'SYNCED', person_id = $1, cloud_result = $2, updated_at = CURRENT_TIMESTAMP
+           WHERE request_id = $3`,
+          [cloudPersonId, JSON.stringify({ fallback: true, returnCode: -9007 }), requestId]
+        ).catch(() => {});
+      }
+
+      console.log(`✅ [Fallback -9007] Đã liên kết và đồng bộ an toàn personID ${cloudPersonId} cho alias ${jobAliasID}.`);
+      return {
+        returnCode: 1,
+        returnMessage: 'Khuôn mặt đã tồn tại trên Cloud, đã đồng bộ an toàn vào Database',
+        personID: cloudPersonId,
+        aliasID: jobAliasID,
+        updated: true
+      };
+    } catch (dbErr) {
+      console.error(`❌ [Fallback -9007 DB Error]:`, dbErr.message);
+      throw dbErr;
     }
-
-    // 2. Cập nhật chính xác vào bản ghi gốc trên DB khớp với Cloud
-    await pool.query(
-      `UPDATE persons 
-       SET 
-          person_id = $1,
-          face_url = CASE WHEN $2 <> '' THEN $2 ELSE face_url END,
-          sync_status = 'SYNCED',
-          updated_at = CURRENT_TIMESTAMP
-       WHERE alias_id = $3 
-          OR person_id = $1 
-          OR (TRIM(LOWER(name)) = TRIM(LOWER($4)) AND ($5::text IS NULL OR class_name = $5));`,
-      [cloudPersonId, cloudFaceUrl, cloudAliasId || jobAliasID, memberName, className]
-    );
-
-    console.log(`✅ [QueueService] Đã đồng bộ an toàn bản ghi gốc theo thông tin HANET Cloud cho ${memberName}.`);
-    return {
-      returnCode: 1,
-      returnMessage: 'Khuôn mặt đã tồn tại trên Cloud, đã đồng bộ an toàn vào Database',
-      personID: cloudPersonId,
-      aliasID: cloudAliasId || jobAliasID,
-      updated: true
-    };
   }
 
-  return {
-    returnCode: 1,
-    returnMessage: 'Đã xử lý fallback khuôn mặt tồn tại',
-    personID: cloudPersonId || null,
-    updated: false
-  };
+  // 2. Không trích xuất được cloudPersonId -> Đưa vào trạng thái REVIEW_REQUIRED (Chống thành công giả!)
+  console.warn(`⚠️ [Fallback -9007] Không trích xuất được PersonID từ phản hồi Cloud. Đánh dấu REVIEW_REQUIRED.`);
+
+  await pool.query(
+    `UPDATE persons
+     SET sync_status = 'REVIEW_REQUIRED', updated_at = CURRENT_TIMESTAMP
+     WHERE alias_id = $1`,
+    [jobAliasID]
+  ).catch(() => {});
+
+  if (requestId) {
+    await pool.query(
+      `UPDATE registration_requests
+       SET status = 'REVIEW_REQUIRED', error_message = 'Khuôn mặt đã tồn tại trên Cloud nhưng thiếu PersonID, cần đối soát', updated_at = CURRENT_TIMESTAMP
+       WHERE request_id = $1`,
+      [requestId]
+    ).catch(() => {});
+  }
+
+  throw new UnrecoverableError('Khuôn mặt đã tồn tại trên HANET Cloud nhưng không trích xuất được PersonID để liên kết. Yêu cầu quản trị viên đối soát.', -9007);
 }
 
-// Xử lý Job đăng ký nhân sự ngầm
+// =========================================================================
+// XỬ LÝ JOB: ĐĂNG KÝ NHÂN SỰ MỚI (register_person_job)
+// =========================================================================
 registrationQueue.process('register_person_job', 2, async (job) => {
-  const { name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename, source_csv, className, class_name, existing_person_id } = job.data;
+  const { name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename, source_csv, className, class_name, existing_person_id, requestId } = job.data;
   const targetClass = source_csv || className || class_name || null;
   const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
   const faceUrl = publicImageUrl || (imageFilename ? `${fallbackBaseUrl}/uploads/${imageFilename}` : null);
 
-  // 1. Chuẩn hóa động Phòng Ban, Chức Vụ và Alias
+  // 1. Chuẩn hóa phòng ban & chức vụ, BẢO TOÀN aliasID
   const resolved = await resolveDepartmentAndAlias(targetClass, title, departmentID, aliasID);
   const finalAlias = resolved.aliasID;
   const finalTitle = resolved.title;
   const finalDeptID = resolved.targetDeptID;
 
-  // 2. Kiểm tra Idempotency Lock bằng Redis SETNX
-  const lockKey = idempotencyService.generateKey('FACE_REGISTER', finalAlias);
-  const currentStatus = await idempotencyService.getLockStatus(lockKey);
-
-  if (currentStatus === 'COMPLETED') {
-    console.log(`[IDEMPOTENCY] Bỏ qua tác vụ đã hoàn tất cho AliasID: ${finalAlias}`);
-    return {
-      status: 'SKIPPED_ALREADY_COMPLETED',
-      returnCode: 1,
-      returnMessage: 'Tác vụ đã được xử lý hoàn tất trước đó',
-      aliasID: finalAlias,
-      personID: existing_person_id || null
-    };
+  // 2. Cập nhật trạng thái PROCESSING trong registration_requests nếu có
+  if (requestId) {
+    await pool.query(
+      `UPDATE registration_requests
+       SET status = 'PROCESSING', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP
+       WHERE request_id = $1`,
+      [requestId]
+    ).catch(() => {});
   }
 
+  // 3. Idempotency Lock
+  const lockKey = idempotencyService.generateKey('FACE_REGISTER', finalAlias, requestId || '');
   const acquired = await idempotencyService.acquireLock(lockKey, 120);
   if (!acquired) {
-    console.warn(`[CONCURRENCY] Job cho ${finalAlias} đang được xử lý bởi worker khác.`);
+    console.warn(`[CONCURRENCY] Job cho ${finalAlias} (${requestId || 'no-req'}) đang được xử lý bởi worker khác.`);
     throw new Error(`[CONCURRENCY] Job cho ${finalAlias} đang được xử lý bởi worker khác.`);
   }
 
@@ -424,103 +425,130 @@ registrationQueue.process('register_person_job', 2, async (job) => {
 
   try {
     try {
-      // 3. Thử gọi API đăng ký nhân sự (ưu tiên binary multipart nếu có imagePath, hoặc bằng URL)
+      // 4. Nếu đã có existing_person_id thì thực hiện luồng cập nhật khuôn mặt
       let registerRes;
-      if (imagePath && fs.existsSync(imagePath)) {
-        registerRes = await hanetService.registerPerson({
-          name,
-          aliasID: finalAlias,
-          title: finalTitle,
-          departmentID: finalDeptID,
-          imagePath,
-          publicImageUrl,
+      if (existing_person_id) {
+        console.log(`[Queue register_person_job] Hồ sơ đã có person_id ${existing_person_id}. Thực hiện cập nhật khuôn mặt qua updateByFaceUrl...`);
+        registerRes = await hanetService.updateByFaceUrl({
+          personID: existing_person_id,
           faceUrl
         });
+
+        if (registerRes && (registerRes.returnCode === 1 || registerRes.returnCode === '1')) {
+          finalPersonID = existing_person_id;
+        }
       } else {
-        registerRes = await hanetService.registerPersonByUrl({
-          name,
-          aliasID: finalAlias,
-          title: finalTitle,
-          departmentID: finalDeptID,
-          faceUrl: faceUrl || publicImageUrl
-        });
+        // Luồng đăng ký người mới hoàn toàn
+        if (imagePath && fs.existsSync(imagePath)) {
+          registerRes = await hanetService.registerPerson({
+            name,
+            aliasID: finalAlias,
+            title: finalTitle,
+            departmentID: finalDeptID,
+            imagePath,
+            publicImageUrl,
+            faceUrl
+          });
+        } else {
+          registerRes = await hanetService.registerPersonByUrl({
+            name,
+            aliasID: finalAlias,
+            title: finalTitle,
+            departmentID: finalDeptID,
+            faceUrl: faceUrl || publicImageUrl
+          });
+        }
       }
 
-      if (registerRes && registerRes.returnCode === 1) {
-        finalPersonID = registerRes.data?.personID || registerRes.data?.id;
+      // 5. Kiểm tra kết quả trả về từ Cloud
+      if (registerRes && (registerRes.returnCode === 1 || registerRes.returnCode === '1')) {
+        finalPersonID = registerRes.data?.personID || registerRes.data?.id || finalPersonID;
         finalAvatarUrl = registerRes.data?.avatar || registerRes.data?.faceUrl || faceUrl;
-        console.log(`[Queue register_person_job] ✅ Đăng ký mới thành công: ${finalPersonID}`);
+        console.log(`[Queue register_person_job] ✅ Đăng ký/Cập nhật Cloud thành công: PersonID = ${finalPersonID}`);
 
-        // Tự động gán phòng ban chuẩn trên Cloud
+        // Gán và khóa phòng ban
         if (finalDeptID && finalPersonID) {
           try {
             await hanetService.addPersonsToDepartment(finalDeptID, finalPersonID);
-            console.log(`[Queue register_person_job] ✅ Đã khóa phòng ban ${finalDeptID} (${resolved.departmentName}) cho ${finalPersonID}`);
+            console.log(`[Queue register_person_job] ✅ Đã khóa phòng ban ${finalDeptID} cho ${finalPersonID}`);
           } catch (deptErr) {
-            console.warn(`[Queue register_person_job] Gán phòng ban lỗi:`, deptErr.message);
+            console.warn(`[Queue register_person_job] Gán phòng ban cảnh báo:`, deptErr.message);
           }
         }
 
-        // Tự động cập nhật trạng thái SYNCED vào PostgreSQL
-        if (finalPersonID || finalAlias) {
-          try {
-            await pool.query(
-              `UPDATE persons
-               SET person_id = COALESCE($1, person_id),
-                   face_url = COALESCE($2, face_url),
-                   sync_status = 'SYNCED',
-                   title = COALESCE($3, title),
-                   department_id = COALESCE($4, department_id),
-                   updated_at = CURRENT_TIMESTAMP
-               WHERE alias_id = $5 OR person_id = $1`,
-              [
-                String(finalPersonID),
-                finalAvatarUrl || faceUrl || null,
-                finalTitle || null,
-                finalDeptID || null,
-                finalAlias
-              ]
-            );
-            console.log(`[Queue register_person_job] ✅ Đã cập nhật PostgreSQL persons cho personID: ${finalPersonID} (Alias: ${finalAlias})`);
-          } catch (dbErr) {
-            console.warn(`[Queue register_person_job] Cập nhật Database thất bại:`, dbErr.message);
-          }
+        // Cập nhật trạng thái SYNCED vào PostgreSQL
+        const dbUpdateRes = await pool.query(
+          `UPDATE persons
+           SET person_id = COALESCE($1, person_id),
+               face_url = COALESCE($2, face_url),
+               sync_status = 'SYNCED',
+               title = COALESCE($3, title),
+               department_id = COALESCE($4, department_id),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE alias_id = $5`,
+          [
+            String(finalPersonID),
+            finalAvatarUrl || faceUrl || null,
+            finalTitle || null,
+            finalDeptID || null,
+            finalAlias
+          ]
+        );
+
+        if (dbUpdateRes.rowCount === 0) {
+          console.warn(`[Queue register_person_job] Cảnh báo: Không tìm thấy dòng persons với alias_id = ${finalAlias}`);
         }
 
-        // Đánh dấu hoàn tất trong Redis 24h
-        await idempotencyService.markCompleted(lockKey, 86400);
+        // Cập nhật bảng registration_requests
+        if (requestId) {
+          await pool.query(
+            `UPDATE registration_requests
+             SET status = 'SYNCED', person_id = $1, cloud_result = $2, updated_at = CURRENT_TIMESTAMP
+             WHERE request_id = $3`,
+            [String(finalPersonID), JSON.stringify(registerRes), requestId]
+          );
+        }
+
+        await idempotencyService.markCompleted(lockKey, 3600);
         jobSucceeded = true;
+
+        // Chỉ lên lịch dọn ảnh sau khi JOB ĐÃ HOÀN TẤT THÀNH CÔNG
+        if (imagePath && fs.existsSync(imagePath)) {
+          imageService.cleanupDelayed(imagePath, 30000);
+        }
 
         return { returnCode: 1, returnMessage: 'Success', personID: finalPersonID, aliasID: finalAlias };
       } else if (registerRes && (registerRes.returnCode === -9007 || registerRes.data?.returnCode === -9007)) {
-        // Trường hợp HANET trả HTTP 200 kèm returnCode -9007 (Đã tồn tại khuôn mặt)
-        const fallbackResult = await handleFaceExistsFallback(registerRes, name, targetClass, finalAlias);
+        // Xử lý mã lỗi -9007
+        const fallbackResult = await handleFaceExistsFallback(
+          registerRes,
+          name,
+          targetClass,
+          finalAlias,
+          faceUrl,
+          finalDeptID,
+          finalTitle,
+          requestId
+        );
 
-        // Đánh dấu hoàn tất trong Redis 24h
-        await idempotencyService.markCompleted(lockKey, 86400);
+        await idempotencyService.markCompleted(lockKey, 3600);
         jobSucceeded = true;
+
+        if (imagePath && fs.existsSync(imagePath)) {
+          imageService.cleanupDelayed(imagePath, 30000);
+        }
 
         return fallbackResult;
       } else {
         const errorMsg = getErrorMessage(registerRes?.returnCode, registerRes?.returnMessage);
         const code = Number(registerRes?.returnCode);
 
-        // Kiểm tra lỗi vĩnh viễn (Permanent / Unrecoverable Failure) -> dừng retry ngay và đưa sang DLQ
         if (PERMANENT_ERROR_CODES.has(code)) {
-          console.error(`[Queue register_person_job] ❌ Lỗi vĩnh viễn không thể retry (Mã ${code}): ${errorMsg}`);
-          if (imagePath && fs.existsSync(imagePath)) {
-            const dlqPath = path.join(
-              path.dirname(imagePath),
-              'dlq_' + path.basename(imagePath)
-            );
-            fs.renameSync(imagePath, dlqPath);
-            console.log('🛡️ [DLQ Preserved] Đã lưu ảnh lỗi để kiểm tra:', dlqPath);
-          }
-          job.discard(); // Hủy retry trong Bull
+          console.error(`[Queue register_person_job] ❌ Lỗi vĩnh viễn (Mã ${code}): ${errorMsg}`);
+          job.discard();
           throw new UnrecoverableError(errorMsg, code);
         }
 
-        // Lỗi tạm thời -> giải phóng lock để Bull Queue retry
         await idempotencyService.releaseLock(lockKey);
         throw new Error(`[Mã lỗi ${registerRes?.returnCode}]: ${errorMsg}`);
       }
@@ -532,56 +560,51 @@ registrationQueue.process('register_person_job', 2, async (job) => {
       const errData = apiErr.response?.data;
       const code = Number(errData?.returnCode || apiErr.code);
 
-      // Xử lý lỗi -9007 qua Catch block
       if (code === -9007 || (errData && (errData.returnCode === -9007 || errData.data?.returnCode === -9007))) {
-        const fallbackResult = await handleFaceExistsFallback(apiErr, name, targetClass, finalAlias);
+        const fallbackResult = await handleFaceExistsFallback(
+          apiErr,
+          name,
+          targetClass,
+          finalAlias,
+          faceUrl,
+          finalDeptID,
+          finalTitle,
+          requestId
+        );
 
-        await idempotencyService.markCompleted(lockKey, 86400);
+        await idempotencyService.markCompleted(lockKey, 3600);
         jobSucceeded = true;
+
+        if (imagePath && fs.existsSync(imagePath)) {
+          imageService.cleanupDelayed(imagePath, 30000);
+        }
+
         return fallbackResult;
       }
 
       const errorMsg = getErrorMessage(code, apiErr.message);
 
       if (PERMANENT_ERROR_CODES.has(code)) {
-        console.error(`[Queue register_person_job] ❌ Lỗi vĩnh viễn trong catch block (Mã ${code}): ${errorMsg}`);
-        if (imagePath && fs.existsSync(imagePath)) {
-          const dlqPath = path.join(
-            path.dirname(imagePath),
-            'dlq_' + path.basename(imagePath)
-          );
-          fs.renameSync(imagePath, dlqPath);
-          console.log('🛡️ [DLQ Preserved] Đã lưu ảnh lỗi để kiểm tra:', dlqPath);
-        }
+        console.error(`[Queue register_person_job] ❌ Lỗi vĩnh viễn (Mã ${code}): ${errorMsg}`);
         job.discard();
         throw new UnrecoverableError(errorMsg, code);
       }
 
-      // Lỗi tạm thời -> giải phóng lock để Bull Queue retry
+      // Lỗi tạm thời: giải phóng lock và KHÔNG xóa ảnh để Bull retry
       await idempotencyService.releaseLock(lockKey);
       throw apiErr;
     }
-
   } finally {
-    // [RULE-022] Đối với Lỗi tạm thời (được retry hoặc job thành công): cleanupDelayed(imagePath, 30000)
-    // Đối với Lỗi vĩnh viễn (đã đổi tên sang dlqPath): KHÔNG gọi imageService.cleanupDelayed
-    if (imagePath && fs.existsSync(imagePath)) {
-      imageService.cleanupDelayed(imagePath, 30000);
-    }
+    // KHÔNG tự ý xóa ảnh trong finally nếu job chưa thành công!
   }
 });
 
-// Xử lý Job cập nhật nhân sự ngầm
+// =========================================================================
+// XỬ LÝ JOB: CẬP NHẬT NHÂN SỰ (update_person_job)
+// =========================================================================
 registrationQueue.process('update_person_job', 3, async (job) => {
-  const { personID, name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename } = job.data;
-  const lockKey = idempotencyService.generateKey('PERSON_UPDATE', personID);
-
-  // 1. Kiểm tra Idempotency Lock
-  const currentStatus = await idempotencyService.getLockStatus(lockKey);
-  if (currentStatus === 'COMPLETED') {
-    console.log(`[IDEMPOTENCY] Bỏ qua tác vụ cập nhật đã hoàn tất cho PersonID: ${personID}`);
-    return { status: 'SKIPPED_ALREADY_COMPLETED', success: true, personID };
-  }
+  const { personID, name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename, requestId } = job.data;
+  const lockKey = idempotencyService.generateKey('PERSON_UPDATE', personID, requestId || '');
 
   const acquired = await idempotencyService.acquireLock(lockKey, 120);
   if (!acquired) {
@@ -595,7 +618,7 @@ registrationQueue.process('update_person_job', 3, async (job) => {
 
   try {
     try {
-      // 2. Cập nhật thông tin cơ bản trên HANET Cloud
+      // 1. Cập nhật thông tin cơ bản trên HANET Cloud
       const infoResult = await hanetService.updateInfo({
         personID,
         name,
@@ -604,19 +627,10 @@ registrationQueue.process('update_person_job', 3, async (job) => {
         departmentID
       });
 
-      if (infoResult.returnCode !== 1) {
+      if (infoResult.returnCode !== 1 && infoResult.returnCode !== '1') {
         const errorMsg = getErrorMessage(infoResult.returnCode, infoResult.returnMessage);
         const code = Number(infoResult.returnCode);
         if (PERMANENT_ERROR_CODES.has(code)) {
-          console.error(`[Queue update_person_job] ❌ Lỗi vĩnh viễn không thể retry (Mã ${code}): ${errorMsg}`);
-          if (imagePath && fs.existsSync(imagePath)) {
-            const dlqPath = path.join(
-              path.dirname(imagePath),
-              'dlq_' + path.basename(imagePath)
-            );
-            fs.renameSync(imagePath, dlqPath);
-            console.log('🛡️ [DLQ Preserved] Đã lưu ảnh lỗi để kiểm tra:', dlqPath);
-          }
           job.discard();
           throw new UnrecoverableError(errorMsg, code);
         }
@@ -624,17 +638,14 @@ registrationQueue.process('update_person_job', 3, async (job) => {
         throw new Error(`[Mã lỗi ${infoResult.returnCode}]: ${errorMsg}`);
       }
 
-      // Gán phòng ban để khóa liên kết phòng ban trên HANET Cloud
+      // Gán phòng ban
       if (departmentID && String(departmentID) !== '0') {
         try {
           await hanetService.addPersonsToDepartment(departmentID, personID);
-          console.log(`[Queue update_person_job] ✅ Đã khóa liên kết phòng ban ${departmentID} cho PersonID: ${personID}`);
-        } catch (deptErr) {
-          console.warn(`[Queue update_person_job] Gán phòng ban thất bại:`, deptErr.message);
-        }
+        } catch (deptErr) {}
       }
 
-      // 3. Nếu có ảnh mới, cập nhật Face ID
+      // 2. Cập nhật Face ID nếu có ảnh mới
       const fallbackBaseUrl = (process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
       const faceUrl = publicImageUrl || (imageFilename ? `${fallbackBaseUrl}/uploads/${imageFilename}` : null);
 
@@ -644,19 +655,10 @@ registrationQueue.process('update_person_job', 3, async (job) => {
           faceUrl
         });
 
-        if (faceResult.returnCode !== 1) {
+        if (faceResult.returnCode !== 1 && faceResult.returnCode !== '1') {
           const errorMsg = getErrorMessage(faceResult.returnCode, faceResult.returnMessage);
           const code = Number(faceResult.returnCode);
           if (PERMANENT_ERROR_CODES.has(code)) {
-            console.error(`[Queue update_person_job] ❌ Lỗi vĩnh viễn không thể retry khi cập nhật ảnh (Mã ${code}): ${errorMsg}`);
-            if (imagePath && fs.existsSync(imagePath)) {
-              const dlqPath = path.join(
-                path.dirname(imagePath),
-                'dlq_' + path.basename(imagePath)
-              );
-              fs.renameSync(imagePath, dlqPath);
-              console.log('🛡️ [DLQ Preserved] Đã lưu ảnh lỗi để kiểm tra:', dlqPath);
-            }
             job.discard();
             throw new UnrecoverableError(errorMsg, code);
           }
@@ -665,33 +667,42 @@ registrationQueue.process('update_person_job', 3, async (job) => {
         }
       }
 
-      // 4. Đồng bộ cập nhật vào PostgreSQL
-      try {
+      // 3. Cập nhật PostgreSQL
+      await pool.query(
+        `UPDATE persons
+         SET name = COALESCE($1, name),
+             title = COALESCE($2, title),
+             face_url = COALESCE($3, face_url),
+             department_id = COALESCE($4, department_id),
+             sync_status = 'SYNCED',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE alias_id = $5 OR person_id = $6`,
+        [
+          name || null,
+          title || null,
+          faceUrl || null,
+          departmentID || null,
+          aliasID || null,
+          String(personID)
+        ]
+      );
+
+      if (requestId) {
         await pool.query(
-          `UPDATE persons
-           SET name = COALESCE($1, name),
-               title = COALESCE($2, title),
-               face_url = COALESCE($3, face_url),
-               department_id = COALESCE($4, department_id),
-               sync_status = 'SYNCED',
-               updated_at = CURRENT_TIMESTAMP
-           WHERE alias_id = $5 OR person_id = $6`,
-          [
-            name || null,
-            title || null,
-            faceUrl || null,
-            departmentID || null,
-            aliasID || null,
-            String(personID)
-          ]
-        );
-      } catch (dbErr) {
-        console.warn(`[Queue update_person_job] Cập nhật DB thất bại:`, dbErr.message);
+          `UPDATE registration_requests
+           SET status = 'SYNCED', person_id = $1, updated_at = CURRENT_TIMESTAMP
+           WHERE request_id = $2`,
+          [String(personID), requestId]
+        ).catch(() => {});
       }
 
-      // Đánh dấu hoàn tất trong Redis 24h
-      await idempotencyService.markCompleted(lockKey, 86400);
+      await idempotencyService.markCompleted(lockKey, 3600);
       jobSucceeded = true;
+
+      // Chỉ dọn ảnh khi job thành công
+      if (imagePath && fs.existsSync(imagePath)) {
+        imageService.cleanupDelayed(imagePath, 30000);
+      }
 
       return { success: true, personID };
     } catch (err) {
@@ -702,19 +713,12 @@ registrationQueue.process('update_person_job', 3, async (job) => {
       throw err;
     }
   } finally {
-    // [RULE-022] Đối với Lỗi tạm thời (được retry hoặc job thành công): cleanupDelayed(imagePath, 30000)
-    // Đối với Lỗi vĩnh viễn (đã đổi tên sang dlqPath): KHÔNG gọi imageService.cleanupDelayed
-    if (imagePath && fs.existsSync(imagePath)) {
-      imageService.cleanupDelayed(imagePath, 30000);
-    }
+    // Không xóa ảnh khi retry
   }
 });
 
 /**
  * Lấy danh sách các jobs trong Dead Letter Queue (DLQ)
- * @param {number} start - Vị trí bắt đầu
- * @param {number} end - Vị trí kết thúc
- * @returns {Promise<Array<Object>>}
  */
 async function getDLQJobs(start = 0, end = 50) {
   try {
@@ -736,8 +740,6 @@ async function getDLQJobs(start = 0, end = 50) {
 
 /**
  * Đẩy lại (Retry) thủ công một job từ Dead Letter Queue vào Queue chính
- * @param {string|number} dlqJobId - ID của job trong DLQ
- * @returns {Promise<{ success: boolean, message: string, newJobId?: string|number }>}
  */
 async function retryDLQJob(dlqJobId) {
   try {
@@ -749,20 +751,27 @@ async function retryDLQJob(dlqJobId) {
     const originalData = dlqJob.data?.jobData || dlqJob.data;
     const jobName = dlqJob.data?.jobName || 'register_person_job';
 
-    // Giải phóng lock Idempotency cũ nếu có để cho phép xử lý lại
+    // Khôi phục đường dẫn ảnh nếu cần
+    let imagePath = originalData.imagePath;
+    if (imagePath && !fs.existsSync(imagePath)) {
+      // Thử tìm theo file dlq_
+      const dlqCandidate = path.join(path.dirname(imagePath), 'dlq_' + path.basename(imagePath));
+      if (fs.existsSync(dlqCandidate)) {
+        imagePath = dlqCandidate;
+        originalData.imagePath = dlqCandidate;
+        originalData.imageFilename = path.basename(dlqCandidate);
+      }
+    }
+
+    // Giải phóng lock cũ
     if (originalData.aliasID) {
-      const lockKey = idempotencyService.generateKey('FACE_REGISTER', originalData.aliasID);
-      await idempotencyService.releaseLock(lockKey);
+      await idempotencyService.clearCompleted('FACE_REGISTER', originalData.aliasID);
     }
     if (originalData.personID) {
-      const lockKey = idempotencyService.generateKey('PERSON_UPDATE', originalData.personID);
-      await idempotencyService.releaseLock(lockKey);
+      await idempotencyService.clearCompleted('PERSON_UPDATE', originalData.personID);
     }
 
-    // Đẩy lại vào hàng đợi chính
     const newJob = await registrationQueue.add(jobName, originalData);
-
-    // Xóa khỏi DLQ sau khi đã tái nạp thành công
     await dlqJob.remove();
 
     console.log(`[DLQ Retry] Đã tái nạp thành công job DLQ ${dlqJobId} thành Job mới ${newJob.id}`);
@@ -790,10 +799,56 @@ async function clearDLQ() {
   }
 }
 
+/**
+ * Quét và nạp lại các yêu cầu chưa được đưa vào queue từ registration_outbox (Transactional Outbox)
+ */
+async function dispatchPendingOutbox() {
+  try {
+    const outboxRes = await pool.query(
+      `SELECT id, request_id, payload, attempts
+       FROM registration_outbox
+       WHERE status = 'PENDING' AND attempts < 5
+       ORDER BY created_at ASC
+       LIMIT 50`
+    );
+
+    for (const row of outboxRes.rows) {
+      try {
+        const payload = row.payload;
+        const jobName = payload.operation_type === 'UPDATE_PHOTO' ? 'update_person_job' : 'register_person_job';
+        
+        await registrationQueue.add(jobName, {
+          ...payload,
+          requestId: row.request_id
+        });
+
+        await pool.query(
+          `UPDATE registration_outbox
+           SET status = 'ENQUEUED', updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1`,
+          [row.id]
+        );
+        console.log(`📨 [Outbox Dispatcher] Đã phục hồi và nạp queue cho request_id: ${row.request_id}`);
+      } catch (enqueueErr) {
+        console.warn(`⚠️ [Outbox Dispatcher Warning] Không thể nạp queue cho id ${row.id}:`, enqueueErr.message);
+        await pool.query(
+          `UPDATE registration_outbox
+           SET attempts = attempts + 1, last_error = $1, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2`,
+          [enqueueErr.message, row.id]
+        );
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ [Outbox Dispatcher Error]:', err.message);
+  }
+}
+
 module.exports = {
   resolveDepartmentAndAlias,
   enqueueRegisterPerson: (payload) => registrationQueue.add('register_person_job', payload),
   enqueueUpdatePerson: (payload) => registrationQueue.add('update_person_job', payload),
+  dispatchPendingOutbox,
   getDLQJobs,
   retryDLQJob,
   clearDLQ,

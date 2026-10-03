@@ -45,7 +45,8 @@
                   data-lop="<%= item.lop %>"
                   data-chucvu="<%= item.chuc_vu %>"
                   data-anh="<%= cleanImgUrl %>"
-                  data-hanetid="<%= item.hanet_person_id %>">
+                  data-hanetid="<%= item.hanet_person_id %>"
+                  data-alias="<%= item.alias_id %>">
                 <% if (cleanImgUrl) { %>
                   <img src="<%= cleanImgUrl %>" 
                        class="rounded me-2 flex-shrink-0" 
@@ -282,6 +283,7 @@
     const chucvu = item.getAttribute('data-chucvu');
     const anh = item.getAttribute('data-anh');
     const hanetid = item.getAttribute('data-hanetid');
+    const alias = item.getAttribute('data-alias');
 
     hoTenInput.value = name;
     suggestList.style.display = 'none';
@@ -292,7 +294,8 @@
       lop: lop,
       chuc_vu: chucvu,
       anh_url: anh,
-      hanet_person_id: hanetid
+      hanet_person_id: hanetid,
+      alias_id: alias
     });
   });
 
@@ -308,7 +311,7 @@
     existingPersonIdInput.value = person.hanet_person_id || '';
     lopInput.value = person.lop || DEFAULT_CLASS;
     chucVuInput.value = person.chuc_vu || DEFAULT_TITLE;
-    aliasIdInput.value = generateUniqueAlias(person.phong_ban, person.lop);
+    aliasIdInput.value = person.alias_id || person.aliasID || generateUniqueAlias(person.phong_ban, person.lop);
 
     if ((person.hanet_person_id && person.hanet_person_id.trim() !== '') || (person.anh_url && person.anh_url.trim() !== '')) {
       statusAlert.style.display = 'block';
