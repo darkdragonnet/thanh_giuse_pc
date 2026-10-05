@@ -20,14 +20,32 @@ Trạng thái: Đã triển khai và vượt qua bộ kiểm thử tích hợp h
 | [x] | TASK-014 | Chạy test hồi quy và tích hợp lỗi/concurrency cho toàn bộ REG. | Toàn bộ | 005..013 | Chạy thành công `node tests/test_register_integrity_suite.js` (8/8 PASS) |
 | [ ] | TASK-015 | Kiểm tra trình duyệt/Zalo và hợp đồng HANET trên môi trường thực tế. | 003,005,007,010 | 003,013,014 | Phụ thuộc thiết bị vật lý / camera thực tế của người dùng |
 | [x] | TASK-016 | Phân tích lại độ bao phủ và cập nhật evidence/knowledge/ADR/runbook. | Toàn bộ | 014,015 | Đã cập nhật evidence.md và knowledge.md |
+| [x] | TASK-017 | Chuẩn hóa HanetApiError, stage logging worker update_person_job và cơ chế replay DLQ. | 003,005,007,008 | 012,014 | `tests/test_update_dlq_replay_suite.js` & `test_register_integrity_suite.js` (PASS) |
+| [x] | TASK-018 | Tách module cấu hình không side effect, tạo CLI list/replay DLQ độc lập, URL parser dùng new URL(). | 003,005,007,008 | 017 | `src/config/queueConfig.js`, `urlHelper.js` |
+| [x] | TASK-019 | Sửa quyền sở hữu khóa replay (Lua), replay có khả năng phục hồi (replay state), tách sanitizer/lockHelper/dlqPayloadHelper thuần túy, kiểm soát timeout và thoát tiến trình tự nhiên. | 003,005,007,008 | 018 | 28/28 tests trong `tests/test_update_dlq_replay_suite.js` & 8/8 tests trong `tests/test_register_integrity_suite.js` |
+| [x] | TASK-020 | Harden toàn diện dlqPayloadHelper.js: chặn suy luận đè jobName, bắt xung đột operation_type, quét identifier đa tầng, parseStrictBoolean, từ chối sai kiểu, bắt buộc personID/aliasID, title mặc định null. | 003,005,007,008 | 019 | 15/15 tests trong `tests/test_payload_normalization_hardening.js` (Tổng cộng 51/51 tests PASS) |
+| [x] | TASK-021 | Tách ý nghĩa dữ liệu ảnh: persons.face_url chỉ chứa Cloud CDN URL đã đối soát, không ghi URL uploads tạm vào DB; bảo toàn ảnh cũ khi thay ảnh PENDING/FAILED; đối soát Cloud qua getPersonByAliasID; sửa UI register_csv.ejs; công cụ reconcile_cloud_face_urls.js dry-run. | 001,003,005,007,008,010 | 020 | `tests/test_image_management_reconciliation.js` (14/14 PASS). Tổng cộng 65/65 tests PASS |
 
 ## Phạm vi file đã hoàn thiện
 
 - `migrations/006_register_integrity_outbox.sql`: Bảng `registration_requests` và `registration_outbox`.
-- `src/controllers/personController.js`: Xác thực dữ liệu backend, Transactional Outbox, phân nhánh đăng ký/cập nhật ảnh và API tra cứu trạng thái.
-- `src/services/queueService.js`: Bảo toàn aliasID, xử lý -9007 chuẩn mực, DLQ giữ đúng đường dẫn ảnh, Outbox Dispatcher.
+- `src/config/queueConfig.js`: Cấu hình Bull/Redis dùng chung không side-effect (không import express, worker, outbox, cron).
+- `src/utils/sanitizer.js`: Module thuần túy làm sạch chuỗi, che giấu Bearer/Query/JSON secrets, loại bỏ HTML/control char, giới hạn độ dài.
+- `src/utils/lockHelper.js`: Helper quản lý Distributed Lock nguyên tử bằng Lua Scripts (`acquireReplayLock`, `releaseReplayLock`, `extendReplayLock`), chỉ chủ sở hữu token mới có quyền DEL/EXPIRE.
+- `src/utils/dlqPayloadHelper.js`: Module thuần túy chuẩn hóa payload `jobData`/`originalData`, phát hiện xung đột dữ liệu, bảo toàn `personID` dạng chuỗi, xác minh triad ảnh an toàn.
+- `src/utils/urlHelper.js`: Module chuẩn hóa Public URL dựa trên `new URL()`, bổ sung `isVerifiedHanetCdnUrl` (kiểm tra hostname CDN: `static.hanet.ai`, `vcdn-static.hanet.ai`,...) và `isUploadsUrl`.
+- `src/services/hanetService.js`: Lớp `HanetApiError` bảo toàn endpoint, httpStatus, returnCode, returnMessage (sanitized); parser nghiêm ngặt `returnCode === 1`, giới hạn 1 lần refresh token.
+- `src/services/queueService.js`: Stage logging, worker và fallback -9007 tự động đối soát avatar CDN qua `getPersonByAliasID`, chỉ lưu CDN URL hợp lệ vào `persons.face_url`, bảo toàn URL Cloud cũ khi thất bại.
+- `src/controllers/personController.js`: `handleRegister`, `handleUpdate`, `triggerSync` tuyệt đối không ghi `publicImageUrl` (/uploads/...) vào `persons.face_url`; truyền `sync_status` sang view.
+- `src/views/person/register_csv.ejs`: Phân biệt chính xác trạng thái "Đã có Face ID", "Lỗi cập nhật", "Đang xử lý", fallback `onerror` an toàn, không hiện badge xanh giả tạo khi FAILED.
+- `scripts/reconcile_cloud_face_urls.js`: CLI đối soát và khôi phục Cloud Face URL từ HANET AI Cloud, mặc định `--dry-run`, hỗ trợ `--apply` có kiểm soát.
+- `scripts/list_dlq_jobs.js`: CLI chỉ đọc DLQ, không khởi động processor/worker phụ, đóng kết nối sạch sẽ trong `finally`.
+- `scripts/replay_dlq_job.js`: CLI tái nạp job DLQ producer-only, khóa chống tranh chấp Lua token, lưu trữ liên kết bền vững `idempotency:dlq_replay_state:<id>`, phân biệt chính xác các exit codes.
 - `src/services/idempotencyService.js`: Hỗ trợ requestId, xóa lock cũ khi thay ảnh mới.
 - `src/routes/personRoutes.js`: Thêm route tra cứu trạng thái đăng ký.
 - `src/app.js`: Sửa route `/uploads/:filename` trả 404 chuẩn, kích hoạt bộ quét Outbox định kỳ.
-- `src/views/person/register_csv.ejs`: Bảo toàn `alias_id` khi chọn học sinh từ dropdown.
-- `tests/test_register_integrity_suite.js`: 8 ca kiểm thử tích hợp hồi quy tự động.
+- `tests/test_register_integrity_suite.js`: 8 ca kiểm thử tích hợp hồi quy tự động (8/8 PASS).
+- `tests/test_update_dlq_replay_suite.js`: 28 ca kiểm thử toàn diện cho parser, sanitizer, URL helper, atomic lock, payload helper, CLI scripts và worker integrity (28/28 PASS).
+- `tests/test_payload_normalization_hardening.js`: 15 ca kiểm thử chuẩn hóa payload DLQ (15/15 PASS).
+- `tests/test_image_management_reconciliation.js`: 14 ca kiểm thử quản lý ảnh, bảo toàn Cloud avatar và đối soát dữ liệu (14/14 PASS).
+

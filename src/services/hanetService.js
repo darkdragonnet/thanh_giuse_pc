@@ -2,11 +2,41 @@ const axios = require('axios');
 const qs = require('qs');
 const FormData = require('form-data');
 const fs = require('fs');
+const { sanitizeErrorMessage, validateAndParseReturnCode } = require('../utils/sanitizer');
+
+/**
+ * Lớp lỗi chuẩn hóa cho tất cả các cuộc gọi API tới HANET Cloud
+ * Đảm bảo giữ đủ endpoint, httpStatus, cloudStatusCode, returnCode, returnMessage và không bao giờ lộ token/config
+ */
+class HanetApiError extends Error {
+  constructor({
+    endpoint,
+    httpStatus = null,
+    cloudStatusCode = null,
+    returnCode = null,
+    returnMessage = null,
+    data = null,
+    rawMessage = '',
+    isTransportError = false
+  }) {
+    const safeMsg = sanitizeErrorMessage(returnMessage || rawMessage || 'Lỗi không xác định');
+    const formattedMsg = `[HANET API Error] ${endpoint} | HTTP: ${httpStatus ?? 'N/A'} | CloudStatus: ${cloudStatusCode ?? 'N/A'} | ReturnCode: ${returnCode ?? 'N/A'} | ${safeMsg}`;
+    super(formattedMsg);
+    this.name = 'HanetApiError';
+    this.endpoint = endpoint;
+    this.httpStatus = typeof httpStatus === 'number' && Number.isInteger(httpStatus) ? httpStatus : null;
+    this.cloudStatusCode = cloudStatusCode !== null && cloudStatusCode !== undefined ? String(cloudStatusCode).trim() : null;
+    this.returnCode = validateAndParseReturnCode(returnCode);
+    this.returnMessage = safeMsg;
+    this.data = data;
+    this.isTransportError = isTransportError;
+  }
+}
 
 // Cấu hình axios instance với timeout 25s và Accept header chuẩn
 const hanetAxios = axios.create({
   baseURL: process.env.HANET_API_BASE || 'https://partner.hanet.ai',
-  timeout: 25000, // 25s (25.000ms) theo yêu cầu 10 - 30s của HANET
+  timeout: 25000,
   headers: {
     'Accept': 'application/json'
   }
@@ -19,7 +49,6 @@ class HanetService {
     this.clientId = process.env.HANET_CLIENT_ID;
     this.clientSecret = process.env.HANET_CLIENT_SECRET;
 
-    // Ưu tiên sử dụng Token tĩnh từ biến môi trường (nếu có)
     this.envAccessToken = process.env.HANET_ACCESS_TOKEN || null;
     this.accessToken = this.envAccessToken;
     this.tokenExpiry = null;
@@ -31,19 +60,17 @@ class HanetService {
     if (!pId) {
       console.warn('[HanetService] CẢNH BÁO: HANET_PLACE_ID chưa được định nghĩa trong .env!');
     }
-    return pId;
+    return String(pId || '').trim();
   }
 
-  // Tự động quản lý, ưu tiên token cấu hình và xoay vòng OAuth2 Token
+  // Quản lý và làm mới OAuth2 Access Token
   async getAccessToken(forceRefresh = false) {
     if (!forceRefresh && this.accessToken) {
-      // Nếu có tokenExpiry và chưa hết hạn, hoặc dùng token tĩnh chưa bị đánh dấu hết hạn
       if (!this.tokenExpiry || new Date() < this.tokenExpiry) {
         return this.accessToken;
       }
     }
 
-    // Nếu cần làm mới token hoặc token hết hạn, gọi OAuth2 nếu có Client ID & Client Secret
     if (this.clientId && this.clientSecret) {
       try {
         const res = await axios.post(
@@ -63,38 +90,200 @@ class HanetService {
         this.tokenExpiry = new Date(Date.now() + ((res.data.expires_in || 3600) - 300) * 1000);
         return this.accessToken;
       } catch (err) {
-        throw new Error(`[HANET OAuth Error] Không thể lấy Access Token: ${err.response?.data?.error_description || err.message}`);
+        throw new HanetApiError({
+          endpoint: '/oauth/token',
+          httpStatus: err.response?.status ?? null,
+          returnMessage: sanitizeErrorMessage(err.response?.data?.error_description || err.message),
+          rawMessage: err.message
+        });
       }
     }
 
-    // Nếu không có Client credentials nhưng có envAccessToken
     if (this.accessToken) {
       return this.accessToken;
     }
 
-    throw new Error('[HANET Config Error] Vui lòng cấu hình HANET_ACCESS_TOKEN hoặc cặp HANET_CLIENT_ID / HANET_CLIENT_SECRET trong .env');
+    throw new HanetApiError({
+      endpoint: '/oauth/token',
+      returnMessage: 'Thiếu cấu hình HANET_ACCESS_TOKEN hoặc cặp HANET_CLIENT_ID / HANET_CLIENT_SECRET'
+    });
   }
 
-  // Helper gửi request tự động retry xoay vòng token khi gặp mã lỗi -103 (ACCESS_TOKEN_EXPIRE)
-  async postWithToken(endpoint, data = {}, isRetry = false) {
-    const token = await this.getAccessToken(isRetry);
-    const payload = { ...data, token };
-
-    const res = await hanetAxios.post(endpoint, qs.stringify(payload), {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json'
-      },
-      timeout: 25000
-    });
-
-    // Kiểm tra nếu mã lỗi là -103 (Token hết hạn) và chưa retry
-    if (res.data && res.data.returnCode === -103 && !isRetry) {
-      console.warn('[HANET Service] Access token đã hết hạn (Mã -103). Đang tự động xoay vòng lấy token mới qua OAuth2...');
-      return this.postWithToken(endpoint, data, true);
+  // Helper phân tích và cấu trúc hóa lỗi từ Axios/HTTP/Network
+  parseHanetError(err, endpoint) {
+    if (err instanceof HanetApiError) {
+      return err;
     }
 
-    return res.data;
+    const httpStatus = typeof err.response?.status === 'number' ? err.response.status : null;
+    const errData = err.response?.data;
+    let returnCode = null;
+    let cloudStatusCode = null;
+    let returnMessage = null;
+    let payloadData = null;
+
+    if (errData && typeof errData === 'object' && !Array.isArray(errData)) {
+      returnCode = validateAndParseReturnCode(errData.returnCode);
+      cloudStatusCode = errData.statusCode !== undefined ? errData.statusCode : null;
+      returnMessage = sanitizeErrorMessage(errData.returnMessage || errData.message || (typeof errData.data === 'string' ? errData.data : null));
+      payloadData = errData.data !== undefined ? errData.data : null;
+    } else if (typeof errData === 'string') {
+      returnMessage = sanitizeErrorMessage(errData);
+    } else {
+      returnMessage = sanitizeErrorMessage(err.message);
+    }
+
+    return new HanetApiError({
+      endpoint,
+      httpStatus,
+      cloudStatusCode,
+      returnCode,
+      returnMessage: returnMessage || sanitizeErrorMessage(err.message),
+      data: payloadData,
+      rawMessage: err.message,
+      isTransportError: !err.response
+    });
+  }
+
+  // Helper kiểm tra lỗi xác thực token (401 hoặc -103)
+  isAuthError(err) {
+    const httpStatus = err.httpStatus ?? err.response?.status ?? null;
+    let code = err.returnCode;
+    if (code === undefined || code === null) {
+      if (err.response?.data && typeof err.response.data === 'object' && !Array.isArray(err.response.data)) {
+        code = validateAndParseReturnCode(err.response.data.returnCode);
+      }
+    }
+    return httpStatus === 401 || code === -103;
+  }
+
+  // Helper phân tích HTTP response từ HANET
+  parseHanetResponse(response, endpoint) {
+    const httpStatus = typeof response?.status === 'number' ? response.status : null;
+    const resData = response?.data;
+
+    // 1. Kiểm tra HTTP Status Transport: Nếu không nằm trong 200..299, coi là lỗi HTTP
+    if (httpStatus !== null && (httpStatus < 200 || httpStatus >= 300)) {
+      const errData = resData && typeof resData === 'object' && !Array.isArray(resData) ? resData : null;
+      const parsedReturnCode = errData ? validateAndParseReturnCode(errData.returnCode) : null;
+      const rawMsg = typeof resData === 'string' ? resData : (errData?.returnMessage || errData?.message || `HTTP error ${httpStatus}`);
+      throw new HanetApiError({
+        endpoint,
+        httpStatus,
+        cloudStatusCode: errData?.statusCode ?? null,
+        returnCode: parsedReturnCode,
+        returnMessage: sanitizeErrorMessage(rawMsg),
+        data: errData?.data ?? null,
+        rawMessage: `HTTP status ${httpStatus}`,
+        isTransportError: false
+      });
+    }
+
+    // 2. Kiểm tra format response body
+    if (!resData || typeof resData !== 'object' || Array.isArray(resData)) {
+      throw new HanetApiError({
+        endpoint,
+        httpStatus,
+        returnCode: null,
+        returnMessage: sanitizeErrorMessage(typeof resData === 'string' ? resData : 'Phản hồi từ HANET rỗng hoặc không đúng định dạng JSON'),
+        rawMessage: 'Invalid or non-JSON response body'
+      });
+    }
+
+    // 3. Strict validation: CHỈ chấp nhận resData.returnCode (không fallback code)
+    if (resData.returnCode === undefined || resData.returnCode === null) {
+      throw new HanetApiError({
+        endpoint,
+        httpStatus,
+        cloudStatusCode: resData.statusCode ?? null,
+        returnCode: null,
+        returnMessage: sanitizeErrorMessage(resData.returnMessage || resData.message || 'Phản hồi từ HANET thiếu trường returnCode bắt buộc'),
+        data: resData.data !== undefined ? resData.data : null,
+        rawMessage: 'Missing returnCode in response body'
+      });
+    }
+
+    const returnCode = validateAndParseReturnCode(resData.returnCode);
+    if (returnCode === null) {
+      throw new HanetApiError({
+        endpoint,
+        httpStatus,
+        cloudStatusCode: resData.statusCode ?? null,
+        returnCode: null,
+        returnMessage: sanitizeErrorMessage(`Trường returnCode không đúng định dạng số nguyên (${typeof resData.returnCode})`),
+        data: resData.data !== undefined ? resData.data : null,
+        rawMessage: 'Invalid returnCode type in response body'
+      });
+    }
+
+    const returnMessage = sanitizeErrorMessage(resData.returnMessage || resData.message || null);
+    const payloadData = resData.data !== undefined ? resData.data : null;
+
+    // 4. Hợp đồng chuẩn của HANET AI Cloud: returnCode === 1 là thành công
+    if (returnCode !== 1) {
+      throw new HanetApiError({
+        endpoint,
+        httpStatus,
+        cloudStatusCode: resData.statusCode ?? null,
+        returnCode,
+        returnMessage: returnMessage || `Lỗi nghiệp vụ HANET mã ${returnCode}`,
+        data: payloadData,
+        rawMessage: `Business error code ${returnCode}`
+      });
+    }
+
+    return resData;
+  }
+
+  // Helper gửi request POST chuẩn hóa, bắt lỗi an toàn và bọc trong HanetApiError
+  async postWithToken(endpoint, data = {}, isRetry = false) {
+    try {
+      const token = await this.getAccessToken(isRetry);
+      const payload = { ...data, token };
+
+      const res = await hanetAxios.post(endpoint, qs.stringify(payload), {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json'
+        },
+        timeout: 25000
+      });
+
+      const resData = res.data;
+      const returnCode = (resData && typeof resData === 'object' && !Array.isArray(resData))
+        ? validateAndParseReturnCode(resData.returnCode)
+        : null;
+
+      // Xử lý token hết hạn trả về trong body mã -103 (tối đa retry 1 lần)
+      if (returnCode === -103 && !isRetry) {
+        console.warn(`[HANET Service] Access token đã hết hạn (Mã -103) tại ${endpoint}. Đang tự động làm mới token...`);
+        return this.postWithToken(endpoint, data, true);
+      }
+
+      return this.parseHanetResponse(res, endpoint);
+    } catch (err) {
+      if (err instanceof HanetApiError) {
+        if (err.returnCode === -103 && !isRetry) {
+          console.warn(`[HANET Service] Access token đã hết hạn (Mã -103) tại ${endpoint}. Đang thử làm mới token...`);
+          return this.postWithToken(endpoint, data, true);
+        }
+        console.error(`❌ [HANET API Call Failed] Endpoint: ${endpoint} | HTTP: ${err.httpStatus ?? 'N/A'} | ReturnCode: ${err.returnCode !== null ? err.returnCode : 'N/A'} | Message: ${err.returnMessage}`);
+        throw err;
+      }
+
+      const apiErr = this.parseHanetError(err, endpoint);
+
+      // Tự động retry 1 lần nếu gặp lỗi HTTP 401 hoặc mã -103
+      if (this.isAuthError(err) && !isRetry) {
+        console.warn(`[HANET Service] Xác thực thất bại (HTTP ${apiErr.httpStatus} / Code ${apiErr.returnCode}) tại ${endpoint}. Đang thử làm mới token...`);
+        return this.postWithToken(endpoint, data, true);
+      }
+
+      // Log an toàn: CHỈ log các trường cần thiết, KHÔNG log token / headers / axios config
+      console.error(`❌ [HANET API Call Failed] Endpoint: ${endpoint} | HTTP: ${apiErr.httpStatus ?? 'N/A'} | ReturnCode: ${apiErr.returnCode !== null ? apiErr.returnCode : 'N/A'} | Message: ${apiErr.returnMessage}`);
+
+      throw apiErr;
+    }
   }
 
   /* =========================================================================
@@ -111,7 +300,6 @@ class HanetService {
     const cleanTitle = String(data.title || 'Nhân viên').trim();
     const cleanDepartmentID = String(data.departmentID || '').trim();
 
-    // Đưa token vào form-data body thay vì HTTP Header
     formData.append('token', token);
     formData.append('placeID', this.placeId);
     formData.append('name', cleanName);
@@ -119,15 +307,16 @@ class HanetService {
     formData.append('title', cleanTitle);
     formData.append('departmentID', cleanDepartmentID);
 
-    // Đọc file ảnh từ local path và đính kèm binary stream (field name: 'file')
     if (data.imagePath && fs.existsSync(data.imagePath)) {
       formData.append('file', fs.createReadStream(data.imagePath));
     } else {
-      throw new Error('[HanetService] Không tìm thấy file ảnh tại đường dẫn để upload.');
+      throw new HanetApiError({
+        endpoint: '/person/register',
+        returnMessage: 'Không tìm thấy file ảnh tại đường dẫn để upload.'
+      });
     }
 
     try {
-      // Gửi request với axios instance, form-data headers, maxBodyLength/maxContentLength: Infinity và timeout 25s
       const response = await hanetAxios.post('/person/register', formData, {
         headers: {
           ...formData.getHeaders(),
@@ -138,31 +327,40 @@ class HanetService {
         timeout: 25000
       });
 
-      // Kiểm tra token hết hạn (Mã -103) và xoay vòng
-      if (response.data && response.data.returnCode === -103 && !isRetry) {
-        console.warn('[HANET Service] Access token đã hết hạn (Mã -103). Đang tự động xoay vòng lấy token mới qua OAuth2...');
+      const resData = response.data;
+      const returnCode = resData ? (resData.returnCode !== undefined ? Number(resData.returnCode) : null) : null;
+
+      if (returnCode === -103 && !isRetry) {
+        console.warn('[HANET Service] Access token đã hết hạn (Mã -103). Đang tự động xoay vòng lấy token mới...');
         return this.registerPerson(data, true);
       }
 
-      return response.data;
+      return this.parseHanetResponse(response, '/person/register');
     } catch (err) {
-      console.error('[HanetService Error Detail]:', {
-        status: err.response?.status,
-        data: err.response?.data,
-        message: err.message
-      });
-      throw err;
+      if (err instanceof HanetApiError) {
+        if (err.returnCode === -103 && !isRetry) {
+          console.warn('[HANET Service] Access token đã hết hạn (Mã -103). Đang thử làm mới token...');
+          return this.registerPerson(data, true);
+        }
+        console.error(`❌ [HANET registerPerson Error] HTTP: ${err.httpStatus || 'N/A'} | Code: ${err.returnCode !== null ? err.returnCode : 'N/A'} | Message: ${err.returnMessage}`);
+        throw err;
+      }
+
+      const apiErr = this.parseHanetError(err, '/person/register');
+
+      if (this.isAuthError(err) && !isRetry) {
+        return this.registerPerson(data, true);
+      }
+
+      console.error(`❌ [HANET registerPerson Error] HTTP: ${apiErr.httpStatus || 'N/A'} | Code: ${apiErr.returnCode !== null ? apiErr.returnCode : 'N/A'} | Message: ${apiErr.returnMessage}`);
+
+      throw apiErr;
     }
   }
 
   /**
-   * Cập nhật thông tin nhân sự trên HANET Cloud theo RULE-004
-   * @param {string|Object} personID - Cloud Person ID hoặc Object dữ liệu
-   * @param {string} name - Họ và tên
-   * @param {string} aliasID - Mã Alias ID
-   * @param {string} departmentID - Mã phòng ban HANET (Bắt buộc không được null/trống)
-   * @param {string} title - Chức danh (mặc định: 'Học Sinh')
-   * @returns {Promise<Object>}
+   * Cập nhật thông tin nhân sự trên HANET Cloud
+   * Luôn giữ personID dạng chuỗi
    */
   async updatePerson(personID, name, aliasID, departmentID, title = 'Học Sinh') {
     let pId, pName, pAlias, pDept, pTitle;
@@ -187,13 +385,12 @@ class HanetService {
     const cleanTitle = String(pTitle || 'Học Sinh').trim();
     const cleanDeptID = String(pDept || '').trim();
 
-    // Đảm bảo departmentID không được để trống hoặc null
     const finalDeptID = (!cleanDeptID || cleanDeptID === '0' || cleanDeptID === 'undefined' || cleanDeptID === 'null')
       ? '990653'
       : cleanDeptID;
 
     const payload = {
-      placeID: String(this.placeId).trim(),
+      placeID: this.placeId,
       name: cleanName,
       title: cleanTitle,
       departmentID: String(finalDeptID)
@@ -206,50 +403,15 @@ class HanetService {
       payload.aliasID = cleanAliasID;
     }
 
-    try {
-      // Ưu tiên gọi /person/updateInfo (chuẩn cập nhật thông tin HANET Cloud)
-      const res = await this.postWithToken('/person/updateInfo', payload);
-      if (res && (res.returnCode === 1 || res.returnCode === '1')) {
-        return res;
-      }
-
-      // Nếu trả về mã lỗi -1, thử biến thể endpoint /person/update
-      if (res && (res.returnCode === -1 || res.returnCode === '-1')) {
-        console.warn('[HanetService] /person/updateInfo trả về -1, thử endpoint /person/update...');
-        const altRes = await this.postWithToken('/person/update', payload).catch(() => null);
-        if (altRes && (altRes.returnCode === 1 || altRes.returnCode === '1')) {
-          return altRes;
-        }
-      }
-
-      return res;
-    } catch (err) {
-      console.error('[HanetService updatePerson Error]:', err.response?.data || err.message);
-      // Fallback nếu có aliasID
-      if (cleanAliasID) {
-        try {
-          const fallbackPayload = {
-            placeID: String(this.placeId).trim(),
-            aliasID: cleanAliasID,
-            name: cleanName,
-            title: cleanTitle,
-            departmentID: String(finalDeptID)
-          };
-          return await this.postWithToken('/person/updateInfo', fallbackPayload);
-        } catch (fallbackErr) {
-          throw fallbackErr;
-        }
-      }
-      throw err;
-    }
+    const res = await this.postWithToken('/person/updateInfo', payload);
+    return res;
   }
 
-  // Alias hỗ trợ tương thích với updateInfo
+  // Alias tương thích cho updateInfo
   async updateInfo(data) {
     return this.updatePerson(data);
   }
 
-  // Helper cập nhật thông tin nhân sự theo tham số rời
   async updatePersonInfo(personID, name, title, aliasID, departmentID) {
     return this.updatePerson(personID, name, aliasID, departmentID, title);
   }
@@ -276,7 +438,6 @@ class HanetService {
     return this.postWithToken('/person/updateByFaceUrl', payload);
   }
 
-  // Helper cập nhật Face ID theo (personID, faceUrl)
   async updatePersonByFaceUrl(personID, faceUrl) {
     if (typeof personID === 'object' && personID !== null) {
       return this.updateByFaceUrl(personID);
@@ -284,7 +445,7 @@ class HanetService {
     return this.updateByFaceUrl({ personID, faceUrl });
   }
 
-  // Đăng ký nhân sự qua URL ảnh (FaceUrl)
+  // Đăng ký nhân sự qua URL ảnh
   async registerPersonByUrl(data) {
     const payload = {
       placeID: this.placeId,
@@ -298,16 +459,13 @@ class HanetService {
   }
 
   /**
-   * Lấy danh sách nhân sự từ Cloud HANET (Hỗ trợ phân trang tự động gom trọn vẹn 100% dữ liệu)
-   * @param {Object|boolean} options - Cấu hình { page, size, fetchAll } hoặc boolean fetchAll
-   * @returns {Promise<{ returnCode: number, returnMessage: string, data: Array, total: number }>}
+   * Lấy danh sách nhân sự từ Cloud HANET (Hỗ trợ gom phân trang)
    */
   async getListByPlace(options = { fetchAll: true, size: 50 }) {
     const isFetchAll = typeof options === 'boolean' ? options : (options?.fetchAll !== false);
     const requestedPage = typeof options === 'object' && options?.page ? Number(options.page) : 1;
     const pageSize = typeof options === 'object' && options?.size ? Number(options.size) : 50;
 
-    // Nếu chỉ lấy 1 trang cụ thể (fetchAll = false)
     if (!isFetchAll) {
       return this.postWithToken('/person/getListByPlace', {
         placeID: this.placeId,
@@ -316,11 +474,10 @@ class HanetService {
       });
     }
 
-    // Tự động quét phân trang lấy toàn bộ nhân sự (fetchAll = true)
     const personMap = new Map();
     let currentPage = 1;
     let keepPaging = true;
-    const maxPages = 50; // Giới hạn an toàn tối đa 50 trang
+    const maxPages = 50;
 
     while (keepPaging && currentPage <= maxPages) {
       try {
@@ -330,7 +487,6 @@ class HanetService {
           size: pageSize
         });
 
-        // Trích xuất mảng dữ liệu nhân sự linh hoạt
         let items = [];
         if (res && Array.isArray(res.data)) {
           items = res.data;
@@ -356,7 +512,6 @@ class HanetService {
             keepPaging = false;
           } else {
             currentPage++;
-            // Khoảng nghỉ nhỏ 150ms để không vượt quá Rate Limit của HANET Cloud
             await new Promise(resolve => setTimeout(resolve, 150));
           }
         } else {
@@ -377,12 +532,10 @@ class HanetService {
     };
   }
 
-  // Helper chuyên dụng lấy toàn bộ nhân sự
   async getAllPersonsByPlace(size = 50) {
     return this.getListByPlace({ fetchAll: true, size });
   }
 
-  // Tra cứu chi tiết nhân sự qua mã Alias ID (MSNV)
   async getPersonByAliasID(aliasID, placeID = this.placeId) {
     return this.postWithToken('/person/getUserInfoByAliasID', {
       placeID: placeID || this.placeId,
@@ -390,7 +543,6 @@ class HanetService {
     });
   }
 
-  // Lấy dữ liệu Check-in theo timestamp (Ràng buộc: cùng 1 tháng dương lịch)
   async getCheckinByTimestamp(fromTimestamp, toTimestamp) {
     return this.postWithToken('/person/getCheckinByPlaceIdInTimestamp', {
       placeID: this.placeId,
@@ -400,11 +552,10 @@ class HanetService {
     });
   }
 
-  // Xóa nhân sự trên Cloud
   async removePerson(personID) {
     return this.postWithToken('/person/removePersonByID', {
       placeID: this.placeId,
-      personID
+      personID: String(personID).trim()
     });
   }
 
@@ -412,7 +563,6 @@ class HanetService {
    * DEPARTMENT APIs
    * ========================================================================= */
 
-  // Lấy danh sách phòng ban
   async getDepartmentList(page = 1, size = 100, keyword = '') {
     const payload = {
       placeID: this.placeId,
@@ -423,7 +573,6 @@ class HanetService {
     return this.postWithToken('/department/list', payload);
   }
 
-  // Tạo mới phòng ban
   async createDepartment(name, desc = '') {
     return this.postWithToken('/department/create', {
       placeID: this.placeId,
@@ -432,53 +581,52 @@ class HanetService {
     });
   }
 
-  // Cập nhật phòng ban
   async updateDepartment(departmentID, name, desc = '') {
     return this.postWithToken('/department/update', {
       placeID: this.placeId,
-      id: departmentID,
+      id: String(departmentID).trim(),
       name,
       desc
     });
   }
 
-  // Xóa phòng ban
   async removeDepartment(departmentID) {
     return this.postWithToken('/department/remove', {
       placeID: this.placeId,
-      id: departmentID
+      id: String(departmentID).trim()
     });
   }
 
-  // Lấy danh sách nhân sự thuộc phòng ban
   async getPersonsByDepartment(departmentID, page = 1, size = 50) {
     return this.postWithToken('/department/list-person', {
       placeID: this.placeId,
-      departmentID,
+      departmentID: String(departmentID).trim(),
       page,
       size
     });
   }
 
-  // Thêm nhân sự vào phòng ban
   async addPersonsToDepartment(departmentID, personIDs) {
-    const formattedPersonIDs = Array.isArray(personIDs) ? personIDs.join(',') : String(personIDs);
+    const formattedPersonIDs = Array.isArray(personIDs) ? personIDs.map(String).join(',') : String(personIDs);
     return this.postWithToken('/department/add-person', {
       placeID: this.placeId,
-      departmentID,
+      departmentID: String(departmentID).trim(),
       personIDs: formattedPersonIDs
     });
   }
 
-  // Xóa nhân sự khỏi phòng ban
   async removePersonsFromDepartment(departmentID, personIDs) {
-    const formattedPersonIDs = Array.isArray(personIDs) ? personIDs.join(',') : String(personIDs);
+    const formattedPersonIDs = Array.isArray(personIDs) ? personIDs.map(String).join(',') : String(personIDs);
     return this.postWithToken('/department/remove-person', {
       placeID: this.placeId,
-      departmentID,
+      departmentID: String(departmentID).trim(),
       personID: formattedPersonIDs
     });
   }
 }
 
-module.exports = new HanetService();
+const hanetServiceInstance = new HanetService();
+hanetServiceInstance.HanetApiError = HanetApiError;
+
+module.exports = hanetServiceInstance;
+module.exports.HanetApiError = HanetApiError;

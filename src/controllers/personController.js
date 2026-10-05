@@ -6,6 +6,7 @@ const queueService = require('../services/queueService');
 const idempotencyService = require('../services/idempotencyService');
 const { pool } = require('../config/database');
 const { getErrorMessage } = require('../utils/hanetErrorMap');
+const { isVerifiedHanetCdnUrl } = require('../utils/urlHelper');
 
 // [READ] Danh sách Nhân sự từ Cloud và Database
 exports.listPersons = async (req, res, next) => {
@@ -111,7 +112,8 @@ exports.viewRegisterByFile = async (req, res) => {
       chuc_vu: row.title || 'Học Sinh',
       anh_url: row.face_url || '',
       hanet_person_id: row.person_id || '',
-      alias_id: row.alias_id || ''
+      alias_id: row.alias_id || '',
+      sync_status: row.sync_status || 'PENDING'
     }));
 
     if (csvList.length === 0) {
@@ -182,7 +184,7 @@ exports.handleRegister = async (req, res, next) => {
     if (targetAlias) {
       // 5.1 Trường hợp người dùng chọn hồ sơ có sẵn theo alias_id
       const existingRes = await client.query(
-        `SELECT id, alias_id, person_id, name, class_name, department_id, title, sync_status 
+        `SELECT id, alias_id, person_id, name, class_name, department_id, title, face_url, sync_status 
          FROM persons 
          WHERE alias_id = $1 LIMIT 1`,
         [targetAlias]
@@ -206,7 +208,7 @@ exports.handleRegister = async (req, res, next) => {
     if (!matchedPerson) {
       // 5.2 Không có alias hoặc alias mới -> Tìm theo tên và lớp (chỉ khớp bản ghi chưa có person_id)
       const nameMatchRes = await client.query(
-        `SELECT id, alias_id, person_id, name, class_name, department_id, title, sync_status 
+        `SELECT id, alias_id, person_id, name, class_name, department_id, title, face_url, sync_status 
          FROM persons 
          WHERE TRIM(LOWER(name)) = TRIM(LOWER($1)) 
            AND ($2::text IS NULL OR class_name = $2)
@@ -259,14 +261,22 @@ exports.handleRegister = async (req, res, next) => {
     await client.query('BEGIN');
 
     // 7.1 Cập nhật hoặc Thêm mới bản ghi persons với trạng thái PENDING
+    // QUY TẮC BẢO TOÀN DỮ LIỆU:
+    // Tuyệt đối KHÔNG ghi publicImageUrl (URL /uploads/ tạm) vào persons.face_url.
+    // - Với bản ghi mới: face_url khởi tạo là NULL.
+    // - Với bản ghi cập nhật: giữ nguyên persons.face_url hiện có (chỉ Cloud CDN đã đối soát mới được ghi).
+    const initialFaceUrl = (matchedPerson?.face_url && isVerifiedHanetCdnUrl(matchedPerson.face_url)) ? matchedPerson.face_url : null;
     await client.query(
       `INSERT INTO persons (alias_id, person_id, name, class_name, department_id, title, face_url, sync_status, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', CURRENT_TIMESTAMP)
        ON CONFLICT (alias_id) DO UPDATE SET
-         face_url = EXCLUDED.face_url,
+         name = EXCLUDED.name,
+         class_name = COALESCE(EXCLUDED.class_name, persons.class_name),
+         department_id = COALESCE(EXCLUDED.department_id, persons.department_id),
+         title = COALESCE(EXCLUDED.title, persons.title),
          sync_status = 'PENDING',
          updated_at = CURRENT_TIMESTAMP;`,
-      [targetAlias, targetPersonId, name, targetClass, finalDeptID, finalTitle, publicImageUrl]
+      [targetAlias, targetPersonId, name, targetClass, finalDeptID, finalTitle, initialFaceUrl]
     );
 
     // 7.2 Lưu vết yêu cầu vào bảng registration_requests
@@ -486,20 +496,22 @@ exports.handleUpdate = async (req, res, next) => {
     }
 
     // Cập nhật Database PostgreSQL
+    // QUY TẮC BẢO TOÀN DỮ LIỆU:
+    // KHÔNG ghi đè publicImageUrl tạm thời vào persons.face_url!
+    // Giữ nguyên persons.face_url hiện có cho đến khi Cloud xác nhận ảnh mới thành công.
     await pool.query(
       `UPDATE persons
        SET name = $1,
            title = $2,
            alias_id = COALESCE(NULLIF($3, ''), alias_id),
-           face_url = COALESCE($4, face_url),
-           department_id = $5,
+           department_id = $4,
+           sync_status = 'PENDING',
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $6 OR alias_id = $7 OR person_id = $7`,
+       WHERE id = $5 OR alias_id = $6 OR person_id = $6`,
       [
         targetName,
         targetTitle,
         targetAliasId,
-        publicImageUrl,
         currentDeptId,
         existingPerson ? existingPerson.id : null,
         String(targetId)
@@ -625,7 +637,8 @@ exports.triggerSync = async (req, res, next) => {
     for (const cp of cloudPersons) {
       const pId = String(cp.personID || cp.id);
       const name = cp.name;
-      const avatar = cp.avatar || cp.faceUrl || null;
+      const rawAvatar = cp.avatar || cp.faceUrl || null;
+      const avatar = isVerifiedHanetCdnUrl(rawAvatar) ? rawAvatar : null;
       const alias = cp.aliasID || null;
       const deptId = cp.departmentID ? String(cp.departmentID) : null;
       const title = cp.title || 'Học Sinh';
@@ -636,6 +649,9 @@ exports.triggerSync = async (req, res, next) => {
            VALUES ($1, $2, $3, $4, $5, $6, 'SYNCED', CURRENT_TIMESTAMP)
            ON CONFLICT (alias_id) DO UPDATE SET
              person_id = EXCLUDED.person_id,
+             name = COALESCE(EXCLUDED.name, persons.name),
+             department_id = COALESCE(EXCLUDED.department_id, persons.department_id),
+             title = COALESCE(EXCLUDED.title, persons.title),
              face_url = COALESCE(EXCLUDED.face_url, persons.face_url),
              sync_status = 'SYNCED',
              updated_at = CURRENT_TIMESTAMP`,

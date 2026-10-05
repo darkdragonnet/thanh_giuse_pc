@@ -38,16 +38,23 @@
                  } else {
                    cleanImgUrl = cleanImgUrl.replace(/[\[\]"']/g, '').trim();
                  }
+                 const isUpload = cleanImgUrl.includes('/uploads/') || cleanImgUrl.startsWith('/uploads');
+                 const hasValidCloudImg = cleanImgUrl && !isUpload && (cleanImgUrl.includes('hanet.ai') || cleanImgUrl.startsWith('http'));
+                 const syncStatus = (item.sync_status || 'PENDING').toUpperCase();
+                 const isSynced = syncStatus === 'SYNCED' && hasValidCloudImg;
+                 const isFailed = syncStatus === 'FAILED';
+                 const isPending = syncStatus === 'PENDING' || syncStatus === 'PROCESSING';
             %>
               <li class="dropdown-item py-2 d-flex align-items-center cursor-pointer suggest-item"
                   data-name="<%= item.ho_ten %>"
                   data-phong="<%= item.phong_ban %>"
                   data-lop="<%= item.lop %>"
                   data-chucvu="<%= item.chuc_vu %>"
-                  data-anh="<%= cleanImgUrl %>"
+                  data-anh="<%= hasValidCloudImg ? cleanImgUrl : '' %>"
                   data-hanetid="<%= item.hanet_person_id %>"
-                  data-alias="<%= item.alias_id %>">
-                <% if (cleanImgUrl) { %>
+                  data-alias="<%= item.alias_id %>"
+                  data-syncstatus="<%= syncStatus %>">
+                <% if (hasValidCloudImg) { %>
                   <img src="<%= cleanImgUrl %>" 
                        class="rounded me-2 flex-shrink-0" 
                        style="width: 26px; height: 26px; object-fit: cover; border: 1px solid #dee2e6;" 
@@ -62,9 +69,17 @@
                   <span class="fw-semibold text-dark"><%= item.ho_ten %></span>
                   <small class="text-muted ms-1">(<%= item.lop || item.phong_ban %>)</small>
                 </div>
-                <% if (item.hanet_person_id || cleanImgUrl) { %>
+                <% if (isSynced) { %>
                   <span class="badge bg-success-subtle text-success border border-success-subtle ms-auto small" style="font-size: 0.72rem;">
-                    <i class="bi bi-check2-circle me-1"></i>Đã có ảnh - Bấm để chụp lại
+                    <i class="bi bi-check2-circle me-1"></i>Đã có Face ID
+                  </span>
+                <% } else if (isFailed) { %>
+                  <span class="badge bg-danger-subtle text-danger border border-danger-subtle ms-auto small" style="font-size: 0.72rem;">
+                    <i class="bi bi-exclamation-circle me-1"></i>Lỗi cập nhật
+                  </span>
+                <% } else if (isPending && item.hanet_person_id) { %>
+                  <span class="badge bg-warning-subtle text-warning border border-warning-subtle ms-auto small" style="font-size: 0.72rem;">
+                    <i class="bi bi-hourglass-split me-1"></i>Đang xử lý
                   </span>
                 <% } %>
               </li>
@@ -284,6 +299,7 @@
     const anh = item.getAttribute('data-anh');
     const hanetid = item.getAttribute('data-hanetid');
     const alias = item.getAttribute('data-alias');
+    const syncstatus = item.getAttribute('data-syncstatus');
 
     hoTenInput.value = name;
     suggestList.style.display = 'none';
@@ -295,7 +311,8 @@
       chuc_vu: chucvu,
       anh_url: anh,
       hanet_person_id: hanetid,
-      alias_id: alias
+      alias_id: alias,
+      sync_status: syncstatus
     });
   });
 
@@ -313,16 +330,55 @@
     chucVuInput.value = person.chuc_vu || DEFAULT_TITLE;
     aliasIdInput.value = person.alias_id || person.aliasID || generateUniqueAlias(person.phong_ban, person.lop);
 
-    if ((person.hanet_person_id && person.hanet_person_id.trim() !== '') || (person.anh_url && person.anh_url.trim() !== '')) {
+    const syncStatus = (person.sync_status || person.syncstatus || '').toUpperCase();
+    const isUpload = person.anh_url && (person.anh_url.includes('/uploads/') || person.anh_url.startsWith('/uploads'));
+    const hasValidImg = person.anh_url && !isUpload && (person.anh_url.includes('hanet.ai') || person.anh_url.startsWith('http'));
+    const isCloudSynced = syncStatus === 'SYNCED' || (person.hanet_person_id && hasValidImg && syncStatus !== 'FAILED');
+    const isFailed = syncStatus === 'FAILED';
+    const isPending = syncStatus === 'PENDING' || syncStatus === 'PROCESSING';
+
+    const fallbackImgSvg = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 24 24' fill='none' stroke='%23ccc' stroke-width='1.5'><circle cx='12' cy='8' r='4'/><path d='M4 20c0-4 4-6 8-6s8 2 8 6'/></svg>`;
+    const personImgHtml = hasValidImg ? `<img src="${person.anh_url}" class="rounded-circle me-2 flex-shrink-0" style="width:34px;height:34px;object-fit:cover;border:1px solid #dee2e6;" onerror="this.onerror=null;this.src='${fallbackImgSvg}';">` : '<i class="bi bi-info-circle-fill me-2 text-primary fs-5 flex-shrink-0"></i>';
+
+    if (isCloudSynced && (hasValidImg || person.hanet_person_id)) {
       statusAlert.style.display = 'block';
       statusAlert.className = 'alert alert-info py-2 px-3 small rounded-3 border-0 shadow-xs mb-3';
-      const personImgHtml = person.anh_url ? `<img src="${person.anh_url}" class="rounded-circle me-2 flex-shrink-0" style="width:34px;height:34px;object-fit:cover;border:1px solid #dee2e6;" onerror="this.onerror=null;this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'100\\' height=\\'100\\' viewBox=\\'0 0 24 24\\' fill=\\'none\\' stroke=\\'%23ccc\\' stroke-width=\\'1.5\\'><circle cx=\\'12\\' cy=\\'8\\' r=\\'4\\'/><path d=\\'M4 20c0-4 4-6 8-6s8 2 8 6\\'/></svg>';">` : '<i class="bi bi-info-circle-fill me-2 text-primary fs-5 flex-shrink-0"></i>';
       statusAlert.innerHTML = `
         <div class="d-flex align-items-center">
           ${personImgHtml}
           <div>
-            <strong>${person.ho_ten}</strong> (Đã có Face ID trên hệ thống).
+            <strong>${person.ho_ten}</strong> (Đã có Face ID trên HANET Cloud).
             <div class="text-muted" style="font-size:0.8rem;">Chụp hoặc chọn ảnh mới bên dưới nếu muốn cập nhật lại khuôn mặt.</div>
+          </div>
+        </div>
+      `;
+      cameraSection.style.display = 'block';
+      btnSubmit.style.display = 'block';
+      btnSubmit.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i> CẬP NHẬT LẠI KHUÔN MẶT';
+    } else if (isFailed) {
+      statusAlert.style.display = 'block';
+      statusAlert.className = 'alert alert-warning py-2 px-3 small rounded-3 border-0 shadow-xs mb-3';
+      statusAlert.innerHTML = `
+        <div class="d-flex align-items-center">
+          ${personImgHtml}
+          <div>
+            <strong>${person.ho_ten}</strong> — <span class="text-danger fw-semibold">Lần cập nhật ảnh trước đó thất bại</span>.
+            <div class="text-muted" style="font-size:0.8rem;">${hasValidImg ? 'Hệ thống đang giữ Face ID cũ. ' : ''}Vui lòng chụp lại ảnh khuôn mặt rõ nét hơn để thử lại.</div>
+          </div>
+        </div>
+      `;
+      cameraSection.style.display = 'block';
+      btnSubmit.style.display = 'block';
+      btnSubmit.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i> THỬ LẠI CẬP NHẬT ẢNH';
+    } else if (isPending && person.hanet_person_id) {
+      statusAlert.style.display = 'block';
+      statusAlert.className = 'alert alert-secondary py-2 px-3 small rounded-3 border-0 shadow-xs mb-3';
+      statusAlert.innerHTML = `
+        <div class="d-flex align-items-center">
+          ${personImgHtml}
+          <div>
+            <strong>${person.ho_ten}</strong> (Đang trong tiến trình xử lý đồng bộ).
+            <div class="text-muted" style="font-size:0.8rem;">Bạn có thể chụp lại ảnh nếu cần thay đổi.</div>
           </div>
         </div>
       `;
