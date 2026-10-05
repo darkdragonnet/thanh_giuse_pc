@@ -728,16 +728,32 @@ async function runSuite() {
     });
 
   } finally {
-    await pool.query('DELETE FROM classes WHERE name = $1', [suiteClass]);
+    try {
+      await pool.query('DELETE FROM classes WHERE name = $1', [suiteClass]);
+    } catch (e) {}
+
     if (testRedis) {
-      testRedis.disconnect();
+      try {
+        testRedis.disconnect();
+      } catch (e) {}
     }
+
+    if (queueService && typeof queueService.closeQueues === 'function') {
+      await queueService.closeQueues();
+    }
+
+    if (idempotencyService && typeof idempotencyService.close === 'function') {
+      idempotencyService.close();
+    }
+
+    try {
+      await pool.end();
+    } catch (e) {}
   }
 
   console.log('===============================================================');
   console.log(`🎉 KẾT QUẢ: ĐÃ VƯỢT QUA ${passedTests}/${totalTests} BÀI KIỂM THỬ UPDATE PERSON & DLQ REPLAY.`);
   console.log('===============================================================');
-  await pool.end();
   process.exitCode = passedTests === totalTests ? 0 : 1;
 }
 

@@ -689,6 +689,26 @@
       }
     }
 
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function isVerifiedCloudAvatar(url) {
+      if (!url || typeof url !== 'string') return false;
+      const clean = url.trim();
+      if (clean.includes('/uploads/') || clean.startsWith('/uploads')) return false;
+      return clean.startsWith('https://static.hanet.ai') || 
+             clean.startsWith('https://vcdn-static.hanet.ai') || 
+             clean.startsWith('http://hanet-static.vcdn.vn') || 
+             clean.startsWith('https://vcdn.hanet.ai');
+    }
+
     // Render danh sách thành viên trong Pane
     function renderMemberList(side) {
       const listEl = side === 'left' ? el.leftList : el.rightList;
@@ -706,22 +726,34 @@
 
       listEl.innerHTML = members.map(m => {
         const isSelected = state[side].selected.has(m.id);
-        const avatarHtml = m.face_url 
-          ? `<img src="${m.face_url}" class="avatar-sm" alt="${m.name}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'avatar-placeholder\\'>${(m.name||'U').charAt(0).toUpperCase()}</div>'">`
-          : `<div class="avatar-placeholder">${(m.name || 'U').charAt(0).toUpperCase()}</div>`;
+        const name = m.name || '';
+        const alias = m.alias_id || '';
+        const cloudId = String(m.person_id || m.PersonID || '').trim();
+        const syncStatus = (m.sync_status || '').toUpperCase();
+        const initialLetter = escapeHtml((name || 'U').charAt(0).toUpperCase());
+
+        const hasValidCloudImg = isVerifiedCloudAvatar(m.face_url);
+        const avatarHtml = hasValidCloudImg
+          ? `<img src="${escapeHtml(m.face_url)}" class="avatar-sm" alt="${escapeHtml(name)}" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'avatar-placeholder\\'>${initialLetter}</div>'">`
+          : `<div class="avatar-placeholder">${initialLetter}</div>`;
         
-        const badgeSync = m.alias_id
-          ? `<span class="badge bg-success-subtle text-success border border-success-subtle badge-sync"><i class="bi bi-cloud-check me-1"></i>HANET Sync</span>`
-          : `<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle badge-sync"><i class="bi bi-database me-1"></i>DB Only</span>`;
+        let badgeSync = '';
+        if (syncStatus === 'SYNCED' || cloudId.length > 0) {
+          badgeSync = `<span class="badge bg-success-subtle text-success border border-success-subtle badge-sync"><i class="bi bi-cloud-check me-1"></i>HANET Cloud</span>`;
+        } else if (syncStatus === 'FAILED') {
+          badgeSync = `<span class="badge bg-danger-subtle text-danger border border-danger-subtle badge-sync"><i class="bi bi-exclamation-triangle me-1"></i>Lỗi Sync</span>`;
+        } else {
+          badgeSync = `<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle badge-sync"><i class="bi bi-database me-1"></i>DB Only</span>`;
+        }
 
         return `
           <div class="member-item ${isSelected ? 'selected' : ''}" data-id="${m.id}" data-side="${side}">
             <input type="checkbox" class="form-check-input" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); toggleSelectMember('${side}', ${m.id})">
             ${avatarHtml}
             <div class="flex-grow-1 text-truncate">
-              <div class="fw-bold text-dark text-truncate">${m.name}</div>
+              <div class="fw-bold text-dark text-truncate">${escapeHtml(name)}</div>
               <div class="small text-muted font-monospace text-truncate">
-                ${m.alias_id ? m.alias_id : 'Chưa có Face ID'}
+                ${alias ? escapeHtml(alias) : 'Chưa có Face ID'}
               </div>
             </div>
             <div>${badgeSync}</div>
@@ -857,12 +889,12 @@
         const tableRows = data.members.map((m, idx) => `
           <tr>
             <td>${idx + 1}</td>
-            <td class="fw-semibold">${m.name}</td>
-            <td class="font-monospace small text-muted">${m.current_alias || '<i>Chưa có</i>'}</td>
-            <td class="font-monospace small text-primary fw-bold">${m.new_alias || '<span class="text-muted">Giữ nguyên NULL</span>'}</td>
+            <td class="fw-semibold">${escapeHtml(m.name)}</td>
+            <td class="font-monospace small text-muted">${m.current_alias ? escapeHtml(m.current_alias) : '<i>Chưa có</i>'}</td>
+            <td class="font-monospace small text-primary fw-bold">${m.new_alias ? escapeHtml(m.new_alias) : '<span class="text-muted">Giữ nguyên NULL</span>'}</td>
             <td>
               ${m.type === 'HANET_SYNC' 
-                ? '<span class="badge bg-success-subtle text-success border">HANET Sync</span>' 
+                ? '<span class="badge bg-success-subtle text-success border">HANET Cloud</span>' 
                 : '<span class="badge bg-secondary-subtle text-secondary border">DB Only</span>'}
             </td>
           </tr>

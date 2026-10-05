@@ -262,17 +262,30 @@ async function runTestSuite() {
 
   } finally {
     // Dọn dẹp lớp dùng chung
-    await pool.query('DELETE FROM classes WHERE name = $1', [suiteClass]);
+    try {
+      await pool.query('DELETE FROM classes WHERE name = $1', [suiteClass]);
+    } catch (e) {}
+
+    // Đóng toàn bộ Bull Queues và kết nối Redis
+    if (queueService && typeof queueService.closeQueues === 'function') {
+      await queueService.closeQueues();
+    }
+    if (idempotencyService && typeof idempotencyService.close === 'function') {
+      idempotencyService.close();
+    }
+
+    try {
+      await pool.end();
+    } catch (e) {}
   }
 
   console.log('===============================================================');
-  console.log(`🎉 KẾT QUẢ: ĐÃ VƯỢT QUA ${passedTests}/${totalTests} BÀI KIỂM THỬ TÍCH HỢP HỒI QUY.`);
+  console.log(`🎉 KẾT QUẢ: ĐÃ VƯỢT QUA ${passedTests}/${totalTests} BÀI KIỂM THỬ TÍCH HỒI QUY.`);
   console.log('===============================================================');
-  await pool.end();
-  process.exit(passedTests === totalTests ? 0 : 1);
+  process.exitCode = passedTests === totalTests ? 0 : 1;
 }
 
 runTestSuite().catch(e => {
   console.error('Fatal Suite Error:', e);
-  process.exit(1);
+  process.exitCode = 1;
 });

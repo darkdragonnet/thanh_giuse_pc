@@ -305,8 +305,14 @@ async function handleFaceExistsFallback(hanetError, memberName, className, jobAl
     if (!cloudVerifiedAvatar && jobAliasID) {
       try {
         const lookupRes = await hanetService.getPersonByAliasID(jobAliasID);
-        const cloudInfo = lookupRes?.data?.data || lookupRes?.data;
-        const lookupAvatar = cloudInfo?.avatar || cloudInfo?.faceUrl;
+        let lookupAvatar = null;
+        if (Array.isArray(lookupRes?.data)) {
+          const match = lookupRes.data.find(p => p && typeof p === 'object' && p.aliasID === jobAliasID);
+          if (match) lookupAvatar = match.avatar || match.faceUrl;
+        } else {
+          const cloudInfo = lookupRes?.data?.data || lookupRes?.data;
+          lookupAvatar = cloudInfo?.avatar || cloudInfo?.faceUrl;
+        }
         if (isVerifiedHanetCdnUrl(lookupAvatar)) {
           cloudVerifiedAvatar = lookupAvatar;
         }
@@ -497,8 +503,14 @@ registrationQueue.process('register_person_job', 2, async (job) => {
         if (!isVerifiedHanetCdnUrl(cloudAvatarCandidate) && finalAlias) {
           try {
             const lookupRes = await hanetService.getPersonByAliasID(finalAlias);
-            const cloudInfo = lookupRes?.data?.data || lookupRes?.data;
-            const lookupAvatar = cloudInfo?.avatar || cloudInfo?.faceUrl;
+            let lookupAvatar = null;
+            if (Array.isArray(lookupRes?.data)) {
+              const match = lookupRes.data.find(p => p && typeof p === 'object' && p.aliasID === finalAlias);
+              if (match) lookupAvatar = match.avatar || match.faceUrl;
+            } else {
+              const cloudInfo = lookupRes?.data?.data || lookupRes?.data;
+              lookupAvatar = cloudInfo?.avatar || cloudInfo?.faceUrl;
+            }
             if (isVerifiedHanetCdnUrl(lookupAvatar)) {
               cloudAvatarCandidate = lookupAvatar;
             }
@@ -740,8 +752,14 @@ registrationQueue.process('update_person_job', 3, async (job) => {
         if (!isVerifiedHanetCdnUrl(rawCloudAvatar) && aliasID) {
           try {
             const lookupRes = await hanetService.getPersonByAliasID(aliasID);
-            const cloudInfo = lookupRes?.data?.data || lookupRes?.data;
-            const lookupAvatar = cloudInfo?.avatar || cloudInfo?.faceUrl;
+            let lookupAvatar = null;
+            if (Array.isArray(lookupRes?.data)) {
+              const match = lookupRes.data.find(p => p && typeof p === 'object' && p.aliasID === aliasID);
+              if (match) lookupAvatar = match.avatar || match.faceUrl;
+            } else {
+              const cloudInfo = lookupRes?.data?.data || lookupRes?.data;
+              lookupAvatar = cloudInfo?.avatar || cloudInfo?.faceUrl;
+            }
             if (isVerifiedHanetCdnUrl(lookupAvatar)) {
               rawCloudAvatar = lookupAvatar;
             }
@@ -1026,6 +1044,31 @@ async function dispatchPendingOutbox() {
   }
 }
 
+/**
+ * Đóng an toàn các Bull Queues và kết nối Redis liên quan (phục vụ graceful shutdown và teardown test)
+ */
+async function closeQueues() {
+  try {
+    if (registrationQueue) {
+      await registrationQueue.close();
+    }
+  } catch (err) {
+    console.warn('[QueueService] Lỗi khi đóng registrationQueue:', err.message);
+  }
+
+  try {
+    if (deadLetterQueue) {
+      await deadLetterQueue.close();
+    }
+  } catch (err) {
+    console.warn('[QueueService] Lỗi khi đóng deadLetterQueue:', err.message);
+  }
+
+  if (idempotencyService && typeof idempotencyService.close === 'function') {
+    idempotencyService.close();
+  }
+}
+
 module.exports = {
   resolveDepartmentAndAlias,
   enqueueRegisterPerson: (payload) => registrationQueue.add('register_person_job', payload),
@@ -1034,6 +1077,7 @@ module.exports = {
   getDLQJobs,
   retryDLQJob,
   clearDLQ,
+  closeQueues,
   registrationQueue,
   hanetQueue,
   deadLetterQueue,

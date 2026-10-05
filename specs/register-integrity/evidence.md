@@ -103,5 +103,48 @@ Lệnh thực thi: `node tests/test_payload_normalization_hardening.js`
 ========================================================================================
 ```
 
+## Bổ sung: Bộ kiểm thử Quản lý Ảnh, Hiển thị Trạng thái & Đối soát Cloud URL (TASK-021)
 
+Ngày kiểm thử: 2026-10-05. Môi trường: Node.js v25+, PostgreSQL 16 (Local), Unit & Integration Tests.
+Lệnh thực thi: `node tests/test_image_management_reconciliation.js`
 
+| TC | Kịch bản kiểm thử | Kết quả | Trạng thái |
+| --- | --- | --- | --- |
+| TC-01 | `isVerifiedHanetCdnUrl` chấp nhận hostname CDN chính thức (`static.hanet.ai`, `vcdn-static.hanet.ai`, `hanet-static.vcdn.vn`, `vcdn.hanet.ai`) | Nhận diện đúng domain CDN chính thức | PASS |
+| TC-02 | `isVerifiedHanetCdnUrl` từ chối URL uploads tạm, localhost, loopback và domain giả mạo (`evilhanet.ai`, `attacker-hanet.ai.com`) | Chặn URL tạm thời và domain độc hại | PASS |
+| TC-03 | `isUploadsUrl` nhận diện chính xác các đường dẫn `/uploads/...` cục bộ | Phát hiện đúng URL tải lên tạm thời | PASS |
+| TC-04 | `sanitizeImageUrl` làm sạch cú pháp Markdown `[url](url)` | Bóc tách URL chuẩn xác | PASS |
+| TC-05 | `handleRegister` không lưu `publicImageUrl` vào `persons.face_url` (khởi tạo `NULL` cho người mới) | Bảo toàn ngữ nghĩa dữ liệu Postgres | PASS |
+| TC-06 | Thay ảnh bảo toàn URL Cloud cũ trong `persons.face_url` khi đang `PENDING` | Không làm mất avatar cũ khi chờ xử lý | PASS |
+| TC-07 | `handleUpdate` không ghi đè URL tạm vào `persons.face_url` | Giữ nguyên `face_url` hiện tại | PASS |
+| TC-08 | Worker thành công với CDN URL từ Cloud cập nhật `persons.face_url` | Ghi nhận avatar CDN chuẩn xác | PASS |
+| TC-09 | Worker tự động đối soát qua `getPersonByAliasID` khi response mutation thiếu CDN URL | Tự động lấy avatar CDN Cloud | PASS |
+| TC-10 | Worker thất bại (chuyển DLQ) bảo toàn nguyên vẹn `persons.face_url` cũ, không đổi thành URL tạm | Giữ avatar cũ khi job thất bại | PASS |
+| TC-11 | Fallback -9007 chỉ ghi URL CDN Cloud đã xác minh vào `persons.face_url` | Xác minh CDN trước khi lưu DB | PASS |
+| TC-12 | `triggerSync` chỉ đồng bộ URL CDN Cloud hợp lệ, bỏ qua URL tạm `/uploads/` | Lọc bỏ toàn bộ URL không hợp lệ | PASS |
+| TC-13 | UI badge trong `register_csv.ejs` phân biệt chính xác `SYNCED` vs `FAILED` | Không báo thành công giả khi FAILED | PASS |
+| TC-14 | `ALLOWED_HANET_CDN_HOSTNAMES` chứa đầy đủ các host CDN của HANET | Cấu hình allowlist đầy đủ | PASS |
+| TC-15 | `getMemberDisplayState`: `FAILED` + `person_id` hiển thị đúng `FAILED` (không thành `SYNCED`) | Phân tách độc lập Cloud ID và Sync State | PASS |
+| TC-16 | `getMemberDisplayState`: Thiếu `sync_status` không tự suy diễn thành `SYNCED` | Mặc định về `UNKNOWN` an toàn | PASS |
+| TC-17 | `transfer.ejs`: Có `alias_id` nhưng chưa có `person_id` hiển thị `DB Only` (không phải `HANET Sync`) | Không coi `alias_id` là bằng chứng Cloud | PASS |
+| TC-18 | `escapeHtml` làm sạch ký tự script / HTML an toàn, ngăn chặn XSS | Render an toàn trong giao diện | PASS |
+| TC-19 | `selectCloudPerson` thành công khi response `data` là mảng 1 hồ sơ khớp | Trích xuất chính xác từ cấu trúc mảng thực tế | PASS |
+| TC-20 | `selectCloudPerson` lọc đúng alias duy nhất từ mảng nhiều hồ sơ | Lọc chính xác theo aliasID | PASS |
+| TC-21 | `selectCloudPerson` ném lỗi `AMBIGUOUS` khi trùng nhiều hồ sơ cùng alias | Bắt lỗi trùng lặp định danh Cloud | PASS |
+| TC-22 | `selectCloudPerson` ném lỗi `IDENTITY_NOT_FOUND` khi mảng rỗng / không khớp | Báo lỗi không tìm thấy hồ sơ | PASS |
+| TC-23 | `selectCloudPerson` ném lỗi `IDENTITY_CONFLICT` khi personID hoặc placeID không khớp | Từ chối mâu thuẫn định danh | PASS |
+| TC-24 | `selectCloudPerson` ném lỗi `IDENTITY_MISSING` khi hồ sơ thiếu personID | Chặn dữ liệu thiếu trường định danh | PASS |
+| TC-25 | `selectCloudPerson` ném lỗi `PLACE_ID_INVALID` khi placeID là số không an toàn / NaN | Đảm bảo tính hợp lệ của placeID | PASS |
+| TC-26 | `selectCloudPerson` ném lỗi `RESPONSE_SHAPE_INVALID` khi data không phải mảng | Bắt lỗi cấu trúc response sai | PASS |
+| TC-27 | `selectCloudPerson` ném lỗi `HANET_BUSINESS_ERROR` khi returnCode !== 1 | Bắt lỗi nghiệp vụ từ HANET Cloud | PASS |
+| TC-28 | `parseCliArgs` kiểm tra tính hợp lệ và an toàn của CLI flags (bắt buộc `--ids`, chặn cờ lạ, chặn mâu thuẫn) | Bảo vệ CLI khỏi tham số sai | PASS |
+| TC-29 | Optimistic Locking so sánh chính xác timestamp micro giây (`YYYY-MM-DD HH24:MI:SS.US`) | Chống tranh chấp dữ liệu đồng thời | PASS |
+| TC-30 | 5 hồ sơ đợt đầu (364, 368, 370, 383, 395) có đầy đủ metadata đối soát | Sẵn sàng cho quy trình đối soát | PASS |
+| TC-31 | `runReconciliation` end-to-end dry-run với response array fixture: `MATCHED`, proposed CDN URL, không ghi DB | Khớp định danh qua adapter, DB bất biến | PASS |
+| TC-32 | `runReconciliation` end-to-end apply mode với response array fixture: Cập nhật đúng `face_url`, giữ nguyên `sync_status`, ghi `audit_logs` | Apply an toàn có concurrency lock & audit | PASS |
+
+```
+===============================================================
+🎉 KẾT QUẢ: ĐÃ VƯỢT QUA 32/32 BÀI KIỂM THỬ QUẢN LÝ ẢNH & ĐỐI SOÁT CLOUD FACE URL.
+===============================================================
+```

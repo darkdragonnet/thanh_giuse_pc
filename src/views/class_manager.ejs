@@ -295,6 +295,43 @@
       new bootstrap.Toast(toastEl).show();
     }
 
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function isVerifiedCloudAvatar(url) {
+      if (!url || typeof url !== 'string') return false;
+      const clean = url.trim();
+      if (clean.includes('/uploads/') || clean.startsWith('/uploads')) return false;
+      return clean.startsWith('https://static.hanet.ai') || 
+             clean.startsWith('https://vcdn-static.hanet.ai') || 
+             clean.startsWith('http://hanet-static.vcdn.vn') || 
+             clean.startsWith('https://vcdn.hanet.ai');
+    }
+
+    function getMemberDisplayState(m) {
+      const cloudId = String(m.person_id ?? m.PersonID ?? '').trim();
+      const rawStatus = m.sync_status;
+      const syncStatus = (typeof rawStatus === 'string' && rawStatus.trim())
+        ? rawStatus.trim().toUpperCase()
+        : 'UNKNOWN';
+
+      const rawAvatar = m.face_url || '';
+      const hasValidCloudAvatar = isVerifiedCloudAvatar(rawAvatar);
+
+      return {
+        hasCloudReference: cloudId.length > 0,
+        syncStatus,
+        displayAvatarUrl: hasValidCloudAvatar ? rawAvatar : null
+      };
+    }
+
     function renderMembers() {
       const tbody = document.getElementById('memberList');
       tbody.innerHTML = '';
@@ -316,32 +353,46 @@
         const title = m.title || m['Chức Vụ'] || 'Học Sinh';
         const cls = m.class_name || m.class || m['Lớp'] || currentClassName;
         const dept = m.department_id === '990730' ? 'Legiô Mariae' : (m.department_id === '990731' ? 'Giới Trẻ' : (m['Phòng Ban'] || 'Thiếu Nhi'));
-        const avatar = m.face_url || m.links || m.avatar || '';
-        const hasFace = !!(m.person_id || (m.PersonID && String(m.PersonID).trim() !== ''));
-        const syncStatus = m.sync_status || (hasFace ? 'SYNCED' : 'PENDING');
         const alias = m.alias_id || m.AliasID || m.alias || '';
+
+        const displayState = getMemberDisplayState(m);
+        const initialLetter = escapeHtml((name || 'U').charAt(0).toUpperCase());
+
+        let avatarHtml = '';
+        if (displayState.displayAvatarUrl) {
+          avatarHtml = `<img src="${escapeHtml(displayState.displayAvatarUrl)}" class="avatar-sm" alt="${escapeHtml(name)}" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'avatar-placeholder\\'>${initialLetter}</div>'">`;
+        } else {
+          avatarHtml = `<div class="avatar-placeholder">${initialLetter}</div>`;
+        }
+
+        let badgeHtml = '';
+        if (displayState.syncStatus === 'SYNCED') {
+          badgeHtml = `<span class="badge bg-success-subtle text-success border border-success-subtle"><i class="bi bi-check-circle-fill me-1"></i>Đã đồng bộ</span>`;
+        } else if (displayState.syncStatus === 'FAILED') {
+          badgeHtml = `<span class="badge bg-danger-subtle text-danger border border-danger-subtle"><i class="bi bi-exclamation-triangle-fill me-1"></i>Cập nhật thất bại</span>`;
+        } else if (displayState.syncStatus === 'REVIEW_REQUIRED') {
+          badgeHtml = `<span class="badge bg-info-subtle text-info border border-info-subtle"><i class="bi bi-search me-1"></i>Cần đối soát</span>`;
+        } else if (displayState.syncStatus === 'PENDING' || displayState.syncStatus === 'PROCESSING') {
+          badgeHtml = `<span class="badge bg-warning-subtle text-warning border border-warning-subtle"><i class="bi bi-clock me-1"></i>Đang xử lý</span>`;
+        } else {
+          badgeHtml = `<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle"><i class="bi bi-dash-circle me-1"></i>Chưa đồng bộ</span>`;
+        }
 
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td class="ps-4">
             <div class="d-flex align-items-center gap-3">
-              ${avatar 
-                ? `<img src="${avatar}" class="avatar-sm" alt="Avatar">`
-                : `<div class="avatar-placeholder">${name.charAt(0).toUpperCase()}</div>`}
+              ${avatarHtml}
               <div>
-                <div class="fw-semibold text-dark">${name}</div>
-                <div class="small text-muted font-monospace">${alias}</div>
+                <div class="fw-semibold text-dark">${escapeHtml(name)}</div>
+                <div class="small text-muted font-monospace">${escapeHtml(alias)}</div>
               </div>
             </div>
           </td>
-          <td><span class="badge bg-light text-dark border">${title}</span></td>
-          <td>${cls}</td>
-          <td><span class="badge bg-secondary-subtle text-secondary border">${dept}</span></td>
-          <td>
-            ${syncStatus === 'SYNCED' || hasFace
-              ? `<span class="badge bg-success-subtle text-success border border-success-subtle"><i class="bi bi-check-circle-fill me-1"></i>Đã có Face ID</span>`
-              : `<span class="badge bg-warning-subtle text-warning border border-warning-subtle"><i class="bi bi-clock me-1"></i>Chờ đồng bộ</span>`}
-          </td>
+          <td><span class="badge bg-light text-dark border">${escapeHtml(title)}</span></td>
+          <td>${escapeHtml(cls)}</td>
+          <td><span class="badge bg-secondary-subtle text-secondary border">${escapeHtml(dept)}</span></td>
+          <td>${badgeHtml}</td>
           <td class="text-end pe-4">
             <button class="btn btn-sm btn-outline-primary me-1" onclick="openEditMemberModal(${idx})" title="Sửa thông tin">
               <i class="bi bi-pencil"></i> Sửa

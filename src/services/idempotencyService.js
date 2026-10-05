@@ -111,6 +111,17 @@ class IdempotencyService {
       return false;
     }
   }
+
+  /**
+   * Đóng kết nối Redis khi dừng ứng dụng hoặc teardown test
+   */
+  close() {
+    if (this.redis) {
+      try {
+        this.redis.disconnect();
+      } catch (err) {}
+    }
+  }
 }
 
 module.exports = new IdempotencyService();
