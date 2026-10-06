@@ -142,18 +142,60 @@ class ImageService {
     };
   }
 
+  async isImageReferenced(filePath) {
+    if (!filePath) return false;
+    const baseName = path.basename(filePath);
+    if (baseName.startsWith('dlq_')) return true; // Bảo tồn vĩnh viễn file DLQ chờ đối soát
+
+    try {
+      const { pool } = require('../config/database');
+      if (!pool) return false;
+
+      const res = await pool.query(
+        `SELECT 1 FROM registration_requests
+         WHERE (image_path = $1 OR image_filename = $2)
+           AND status IN ('ACCEPTED', 'PROCESSING')
+         LIMIT 1`,
+        [filePath, baseName]
+      );
+      if (res.rows && res.rows.length > 0) return true;
+
+      const outboxRes = await pool.query(
+        `SELECT 1 FROM registration_outbox
+         WHERE status = 'PENDING'
+           AND (payload->>'imagePath' = $1 OR payload->>'imageFilename' = $2)
+         LIMIT 1`,
+        [filePath, baseName]
+      );
+      if (outboxRes.rows && outboxRes.rows.length > 0) return true;
+    } catch (_) {
+      // Nếu DB không sẵn sàng, bảo vệ an toàn không xóa
+      return false;
+    }
+    return false;
+  }
+
   cleanup(filePath) {
+    if (filePath && path.basename(filePath).startsWith('dlq_')) return;
     deleteFileSafe(filePath);
   }
 
   cleanupDelayed(filePath, delayMs = 30000) {
     if (!filePath) return;
+    const baseName = path.basename(filePath);
+    if (baseName.startsWith('dlq_')) return;
 
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       try {
+        if (!fs.existsSync(filePath)) return;
+        const isReferenced = await this.isImageReferenced(filePath);
+        if (isReferenced) {
+          console.log(`🛡️ [ImageService] File ${baseName} vẫn còn tác vụ/request tham chiếu. Bỏ qua cleanup.`);
+          return;
+        }
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
-          console.log(`🧹 [ImageService] Đã dọn dẹp file sau ${delayMs / 1000}s: ${path.basename(filePath)}`);
+          console.log(`🧹 [ImageService] Đã dọn dẹp file sau ${delayMs / 1000}s: ${baseName}`);
         }
       } catch (err) {
         console.warn('⚠️ [ImageService Cleanup Warning] Lỗi xóa file:', filePath, err.message);
@@ -165,7 +207,7 @@ class ImageService {
     }
   }
 
-  cleanOldFiles(maxAgeMs = 60 * 60 * 1000) {
+  async cleanOldFiles(maxAgeMs = 60 * 60 * 1000) {
     try {
       const uploadsDir = path.join(process.cwd(), 'uploads');
       if (!fs.existsSync(uploadsDir)) return;
@@ -173,18 +215,22 @@ class ImageService {
       const files = fs.readdirSync(uploadsDir);
       const now = Date.now();
 
-      files.forEach((file) => {
+      for (const file of files) {
         if (file.startsWith('processed_') || file.startsWith('face_')) {
+          if (file.startsWith('dlq_')) continue; // Giữ nguyên file DLQ
           const filePath = path.join(uploadsDir, file);
           try {
             const stats = fs.statSync(filePath);
             if (now - stats.mtimeMs > maxAgeMs) {
-              fs.unlinkSync(filePath);
-              console.log(`🧹 [ImageService GC] Xóa file rác cũ: ${file}`);
+              const isReferenced = await this.isImageReferenced(filePath);
+              if (!isReferenced && fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+                console.log(`🧹 [ImageService GC] Xóa file rác cũ: ${file}`);
+              }
             }
           } catch (fileErr) {}
         }
-      });
+      }
     } catch (err) {
       console.warn('⚠️ [ImageService GC Error]:', err.message);
     }

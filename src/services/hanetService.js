@@ -3,6 +3,7 @@ const qs = require('qs');
 const FormData = require('form-data');
 const fs = require('fs');
 const { sanitizeErrorMessage, validateAndParseReturnCode } = require('../utils/sanitizer');
+const { sanitizeImageUrl, isVerifiedHanetCdnUrl } = require('../utils/urlHelper');
 
 /**
  * Lớp lỗi chuẩn hóa cho tất cả các cuộc gọi API tới HANET Cloud
@@ -416,33 +417,114 @@ class HanetService {
     return this.updatePerson(personID, name, aliasID, departmentID, title);
   }
 
-  // Cập nhật Face ID cho nhân sự qua faceUrl
+  // Cập nhật Face ID cho nhân sự qua URL ảnh (/person/updateByFaceUrl)
   async updateByFaceUrl(data) {
-    const cleanPersonID = String(data.personID || data.id || '').trim();
-    const cleanFaceUrl = String(data.publicImageUrl || data.faceUrl || data.fileUrl || data.avatar || '').trim();
+    if (!data || typeof data !== 'object') {
+      throw new HanetApiError({
+        endpoint: '/person/updateByFaceUrl',
+        returnMessage: 'Dữ liệu đầu vào cho updateByFaceUrl không hợp lệ hoặc rỗng.'
+      });
+    }
+
     const cleanAliasID = String(data.aliasID || '').trim().replace(/\s+/g, '_');
+    const cleanPlaceID = String(data.placeID || this.placeId || '').trim();
+    const rawPhotoUrl = String(data.url || data.publicImageUrl || data.faceUrl || data.fileUrl || data.avatar || '').trim();
+    const cleanPersonID = data.personID !== undefined && data.personID !== null ? String(data.personID).trim() : '';
+
+    if (!cleanAliasID) {
+      throw new HanetApiError({
+        endpoint: '/person/updateByFaceUrl',
+        returnMessage: 'Thiếu aliasID bắt buộc để cập nhật Face ID.'
+      });
+    }
+
+    if (!cleanPlaceID) {
+      throw new HanetApiError({
+        endpoint: '/person/updateByFaceUrl',
+        returnMessage: 'Thiếu placeID bắt buộc để cập nhật Face ID.'
+      });
+    }
+
+    if (!rawPhotoUrl) {
+      throw new HanetApiError({
+        endpoint: '/person/updateByFaceUrl',
+        returnMessage: 'Thiếu URL ảnh hợp lệ để cập nhật Face ID.'
+      });
+    }
+
+    const sanitizedUrl = sanitizeImageUrl(rawPhotoUrl);
+    if (!sanitizedUrl) {
+      throw new HanetApiError({
+        endpoint: '/person/updateByFaceUrl',
+        returnMessage: 'URL ảnh không hợp lệ sau khi làm sạch.'
+      });
+    }
+
+    try {
+      const parsedUrl = new URL(sanitizedUrl);
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        throw new HanetApiError({
+          endpoint: '/person/updateByFaceUrl',
+          returnMessage: `Giao thức URL ảnh không được phép (${parsedUrl.protocol}). Chỉ chấp nhận http: hoặc https:.`
+        });
+      }
+      if (parsedUrl.username || parsedUrl.password) {
+        throw new HanetApiError({
+          endpoint: '/person/updateByFaceUrl',
+          returnMessage: 'URL ảnh không được chứa credentials.'
+        });
+      }
+    } catch (urlErr) {
+      if (urlErr instanceof HanetApiError) throw urlErr;
+      throw new HanetApiError({
+        endpoint: '/person/updateByFaceUrl',
+        returnMessage: `URL ảnh không đúng định dạng: ${urlErr.message}`
+      });
+    }
 
     const payload = {
-      placeID: String(data.placeID || this.placeId).trim(),
-      faceUrl: cleanFaceUrl,
-      fileUrl: cleanFaceUrl
+      placeID: cleanPlaceID,
+      aliasID: cleanAliasID,
+      url: sanitizedUrl
     };
 
     if (cleanPersonID) {
       payload.personID = cleanPersonID;
     }
-    if (cleanAliasID) {
-      payload.aliasID = cleanAliasID;
+
+    const res = await this.postWithToken('/person/updateByFaceUrl', payload);
+    const returnCode = validateAndParseReturnCode(res?.returnCode);
+
+    if (returnCode === 1) {
+      const resData = res.data;
+      const cloudPath = typeof resData === 'object' && resData !== null
+        ? (resData.path || resData.avatar || resData.faceUrl || resData.file || null)
+        : null;
+
+      const isValidCdn = cloudPath ? isVerifiedHanetCdnUrl(cloudPath) : false;
+      const verifiedPath = isValidCdn ? sanitizeImageUrl(cloudPath) : null;
+
+      return {
+        ...res,
+        data: {
+          ...(typeof resData === 'object' && resData !== null ? resData : {}),
+          path: verifiedPath || (typeof resData === 'object' ? resData?.path : null),
+          avatar: verifiedPath || (typeof resData === 'object' ? resData?.avatar : null),
+          faceUrl: verifiedPath || (typeof resData === 'object' ? resData?.faceUrl : null),
+          isVerifiedCdn: isValidCdn,
+          needsReconciliation: !isValidCdn
+        }
+      };
     }
 
-    return this.postWithToken('/person/updateByFaceUrl', payload);
+    return res;
   }
 
   async updatePersonByFaceUrl(personID, faceUrl) {
     if (typeof personID === 'object' && personID !== null) {
       return this.updateByFaceUrl(personID);
     }
-    return this.updateByFaceUrl({ personID, faceUrl });
+    return this.updateByFaceUrl({ personID, url: faceUrl });
   }
 
   // Đăng ký nhân sự qua URL ảnh

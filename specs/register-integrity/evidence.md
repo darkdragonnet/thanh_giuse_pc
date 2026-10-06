@@ -148,3 +148,27 @@ Lệnh thực thi: `node tests/test_image_management_reconciliation.js`
 🎉 KẾT QUẢ: ĐÃ VƯỢT QUA 32/32 BÀI KIỂM THỬ QUẢN LÝ ẢNH & ĐỐI SOÁT CLOUD FACE URL.
 ===============================================================
 ```
+
+## Bổ sung: Bộ kiểm thử Hợp đồng UPDATE_PHOTO & Bảo toàn Danh tính (TASK-022)
+
+Ngày kiểm thử: 2026-10-06. Môi trường: Node.js v25+, PostgreSQL 16 (Local), Redis DB 4, Unit & Integration Tests.
+Lệnh thực thi: `node tests/test_update_photo_contract_suite.js`
+
+| TC | Kịch bản kiểm thử | Kết quả | Trạng thái |
+| --- | --- | --- | --- |
+| TC-01 | `updateByFaceUrl` gửi đúng endpoint `POST /person/updateByFaceUrl` và body form `url`, `aliasID`, `placeID` (không gửi `faceUrl`/`fileUrl`) | Payload đúng chuẩn hợp đồng HANET | PASS |
+| TC-02 | `updateByFaceUrl` chặn URL không hợp lệ (`javascript:`, `credentials`, rỗng, protocol sai) trước khi gửi HTTP | Input validation chặt chẽ trước mạng | PASS |
+| TC-03 | `updateByFaceUrl` đánh dấu `needsReconciliation: true` khi `data.path` thiếu hoặc domain không thuộc CDN HANET | Ngăn chặn nhận nhầm ảnh giả mạo | PASS |
+| TC-04 | Worker `update_person_job` chặn mâu thuẫn PersonID / AliasID trước khi gọi Cloud | Chống mâu thuẫn định danh và ghi đè nhầm | PASS |
+| TC-05 | `UPDATE_PHOTO` bảo toàn metadata quản trị (`name`, `title`, `department_id`, `class_name`), không gọi `updateInfo` | Bảo toàn dữ liệu quản trị | PASS |
+| TC-06 | Lỗi `audit_logs` hoặc `rowCount !== 1` kích hoạt `ROLLBACK` toàn bộ transaction | Đảm bảo tính nguyên tử (Atomicity) | PASS |
+| TC-07 | Checkpoint `alreadyCommitted` nhận diện request đã commit `SYNCED` và không gọi Cloud lần nữa | Idempotency an toàn khi retry | PASS |
+| TC-08 | `isImageReferenced` bảo vệ ảnh đang có request `ACCEPTED`/`PROCESSING` và file `dlq_` | Bảo toàn vòng đời file ảnh | PASS |
+| TC-09 | Khóa Distributed Lock theo người ngăn chặn 2 tác vụ cùng sửa 1 người cùng thời điểm | Tuần tự hóa tác vụ, chống xung đột | PASS |
+
+```
+================================================================================
+🎉 KẾT QUẢ: ĐÃ VƯỢT QUA 9/9 BÀI KIỂM THỬ HỢP ĐỒNG UPDATE_PHOTO.
+================================================================================
+```
+

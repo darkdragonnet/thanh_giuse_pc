@@ -289,9 +289,11 @@ async function handleFaceExistsFallback(hanetError, memberName, className, jobAl
       try {
         const faceRes = await hanetService.updateByFaceUrl({
           personID: cloudPersonId,
-          faceUrl
+          aliasID: jobAliasID,
+          url: faceUrl,
+          placeID: hanetService.placeId
         });
-        const avatarFromFaceRes = faceRes?.data?.avatar || faceRes?.data?.faceUrl || faceRes?.data?.file;
+        const avatarFromFaceRes = faceRes?.data?.path || faceRes?.data?.avatar || faceRes?.data?.faceUrl || faceRes?.data?.file;
         if (isVerifiedHanetCdnUrl(avatarFromFaceRes)) {
           cloudVerifiedAvatar = avatarFromFaceRes;
         }
@@ -467,7 +469,9 @@ registrationQueue.process('register_person_job', 2, async (job) => {
         console.log(`[Worker register_person_job | Job: ${job.id}] [Stage: ${currentStage}] Hồ sơ đã có person_id ${finalPersonID}. Gọi updateByFaceUrl...`);
         registerRes = await hanetService.updateByFaceUrl({
           personID: finalPersonID,
-          faceUrl
+          aliasID: finalAlias,
+          url: faceUrl,
+          placeID: hanetService.placeId
         });
       } else {
         currentStage = 'REGISTER_PERSON';
@@ -666,39 +670,199 @@ registrationQueue.process('register_person_job', 2, async (job) => {
 // XỬ LÝ JOB: CẬP NHẬT NHÂN SỰ (update_person_job)
 // =========================================================================
 registrationQueue.process('update_person_job', 3, async (job) => {
-  const { personID, name, aliasID, title, departmentID, imagePath, publicImageUrl, imageFilename, requestId, isPhotoOnly } = job.data;
-  const cleanPersonID = String(personID || '').trim();
-  const lockKey = idempotencyService.generateKey('PERSON_UPDATE', cleanPersonID, requestId || '');
+  const {
+    personID,
+    name,
+    aliasID,
+    title,
+    departmentID,
+    imagePath,
+    publicImageUrl,
+    imageFilename,
+    requestId,
+    isPhotoOnly,
+    operation_type
+  } = job.data;
+
+  const isPurePhotoUpdate = isPhotoOnly === true || operation_type === 'UPDATE_PHOTO';
+  const cleanPersonID = personID !== undefined && personID !== null ? String(personID).trim() : '';
+  const cleanAliasID = aliasID ? String(aliasID).trim() : '';
 
   let currentStage = 'START';
-  console.log(`[Worker update_person_job | Job: ${job.id} | Req: ${requestId || 'N/A'}] [Stage: ${currentStage}] Bắt đầu xử lý: ${name} (PersonID: ${cleanPersonID})`);
+  console.log(`[Worker update_person_job | Job: ${job.id} | Req: ${requestId || 'N/A'}] [Stage: ${currentStage}] Bắt đầu xử lý: ${name || 'N/A'} (PersonID: ${cleanPersonID || 'N/A'}, Alias: ${cleanAliasID || 'N/A'}, isPhotoOnly: ${isPurePhotoUpdate})`);
 
-  if (!cleanPersonID) {
-    throw new UnrecoverableError('Thiếu PersonID trong job cập nhật nhân sự.', -1);
+  // 1. Kiểm tra nếu đã được commit trong PostgreSQL trước đó (Chống chạy lại Cloud sau sự cố mạng/Redis)
+  if (requestId) {
+    const prevReqRes = await pool.query(
+      'SELECT status, person_id FROM registration_requests WHERE request_id = $1 LIMIT 1',
+      [requestId]
+    ).catch(() => null);
+
+    if (prevReqRes && prevReqRes.rows.length > 0 && prevReqRes.rows[0].status === 'SYNCED') {
+      console.log(`[Worker update_person_job | Job: ${job.id}] ℹ️ Request ${requestId} đã được commit SYNCED trước đó. Bỏ qua gọi Cloud.`);
+      const existingPersonId = prevReqRes.rows[0].person_id || cleanPersonID;
+      const lockKey = idempotencyService.generateKey('PERSON_UPDATE', existingPersonId || cleanAliasID, requestId || '');
+      await idempotencyService.markCompleted(lockKey, 3600).catch(() => {});
+      if (imagePath && fs.existsSync(imagePath)) {
+        imageService.cleanupDelayed(imagePath, 30000);
+      }
+      return { success: true, personID: existingPersonId, alreadyCommitted: true };
+    }
   }
+
+  // 2. Pre-check và đối chiếu hồ sơ PostgreSQL trước khi gọi Cloud
+  currentStage = 'PRE_CHECK_DB';
+  let existingPerson = null;
+  let existingRequest = null;
+
+  const checkClient = await pool.connect();
+  try {
+    let pRes;
+    if (cleanPersonID && cleanAliasID) {
+      pRes = await checkClient.query(
+        'SELECT id, alias_id, person_id, name, class_name, department_id, title, face_url, sync_status FROM persons WHERE person_id = $1 OR alias_id = $2',
+        [cleanPersonID, cleanAliasID]
+      );
+    } else if (cleanPersonID) {
+      pRes = await checkClient.query(
+        'SELECT id, alias_id, person_id, name, class_name, department_id, title, face_url, sync_status FROM persons WHERE person_id = $1',
+        [cleanPersonID]
+      );
+    } else if (cleanAliasID) {
+      pRes = await checkClient.query(
+        'SELECT id, alias_id, person_id, name, class_name, department_id, title, face_url, sync_status FROM persons WHERE alias_id = $1',
+        [cleanAliasID]
+      );
+    } else {
+      throw new UnrecoverableError('Job thiếu cả PersonID và AliasID.', -1);
+    }
+
+    if (pRes.rows.length === 0) {
+      throw new UnrecoverableError(`Không tìm thấy hồ sơ người trong PostgreSQL (PersonID: ${cleanPersonID || 'N/A'}, Alias: ${cleanAliasID || 'N/A'})`, -1);
+    }
+    if (pRes.rows.length > 1) {
+      throw new UnrecoverableError(`Xung đột định danh: tìm thấy ${pRes.rows.length} hồ sơ khớp PersonID ${cleanPersonID} / Alias ${cleanAliasID}`, -1);
+    }
+    existingPerson = pRes.rows[0];
+
+    // So sánh person_id hiện hữu
+    if (existingPerson.person_id && cleanPersonID && existingPerson.person_id !== cleanPersonID) {
+      throw new UnrecoverableError(`Xung đột PersonID: job (${cleanPersonID}) khác DB (${existingPerson.person_id})`, -1);
+    }
+    // So sánh alias_id hiện hữu
+    if (existingPerson.alias_id && cleanAliasID && existingPerson.alias_id !== cleanAliasID) {
+      throw new UnrecoverableError(`Xung đột AliasID: job (${cleanAliasID}) khác DB (${existingPerson.alias_id})`, -1);
+    }
+
+    if (requestId) {
+      const rRes = await checkClient.query(
+        'SELECT request_id, alias_id, person_id, status FROM registration_requests WHERE request_id = $1',
+        [requestId]
+      );
+      if (rRes.rows.length > 0) {
+        existingRequest = rRes.rows[0];
+        if (existingRequest.alias_id && existingPerson.alias_id && existingRequest.alias_id !== existingPerson.alias_id) {
+          throw new UnrecoverableError(`Xung đột AliasID giữa request (${existingRequest.alias_id}) và DB (${existingPerson.alias_id})`, -1);
+        }
+      }
+    }
+  } finally {
+    checkClient.release(); // Giải phóng client DB ngay, không giữ kết nối trong lúc gọi mạng
+  }
+
+  const targetPersonId = existingPerson.person_id || cleanPersonID;
+  const targetAlias = existingPerson.alias_id || cleanAliasID;
+
+  if (!targetPersonId && !targetAlias) {
+    throw new UnrecoverableError('Không thể xác định PersonID hoặc AliasID để cập nhật.', -1);
+  }
+
+  // 3. Khóa xử lý đồng thời (Chống 2 request cùng sửa 1 người)
+  const lockIdentifier = targetPersonId || targetAlias;
+  const lockKey = idempotencyService.generateKey('PERSON_UPDATE', lockIdentifier, requestId || '');
 
   const acquired = await idempotencyService.acquireLock(lockKey, 120);
   if (!acquired) {
-    console.warn(`[CONCURRENCY] Job cập nhật cho ${cleanPersonID} đang được xử lý bởi worker khác.`);
-    throw new Error(`[CONCURRENCY] Job cập nhật cho ${cleanPersonID} đang được xử lý bởi worker khác.`);
+    console.warn(`[CONCURRENCY] Job cập nhật cho ${lockIdentifier} đang được xử lý bởi worker khác.`);
+    throw new Error(`[CONCURRENCY] Job cập nhật cho ${lockIdentifier} đang được xử lý bởi worker khác.`);
   }
 
   let jobSucceeded = false;
   let cloudAvatarUrl = null;
+  let needsReconciliation = false;
 
   try {
     try {
-      // 1. Cập nhật thông tin cơ bản (Chỉ thực hiện nếu không phải là yêu cầu thuần thay ảnh)
-      if (!isPhotoOnly) {
+      // 4. Phân nhánh xử lý
+      if (isPurePhotoUpdate) {
+        // LUỒNG 1: THUẦN THAY ẢNH (UPDATE_PHOTO)
+        // Bắt buộc phải có ảnh. Tuyệt đối KHÔNG gọi updateInfo để sửa metadata!
+        currentStage = 'UPDATE_FACE';
+        const faceUrl = publicImageUrl || (imageFilename ? buildPublicImageUrl(imageFilename) : null);
+        if (!faceUrl) {
+          throw new UnrecoverableError('Yêu cầu UPDATE_PHOTO bắt buộc phải có URL ảnh hợp lệ.', -1);
+        }
+
+        console.log(`[Worker update_person_job | Job: ${job.id}] [Stage: ${currentStage}] Gọi updateByFaceUrl cho PersonID: ${targetPersonId || 'N/A'}, Alias: ${targetAlias} | URL: ${faceUrl}`);
+
+        const faceResult = await hanetService.updateByFaceUrl({
+          personID: targetPersonId,
+          aliasID: targetAlias,
+          url: faceUrl,
+          placeID: hanetService.placeId
+        });
+
+        if (faceResult && (faceResult.returnCode !== 1 && faceResult.returnCode !== '1')) {
+          const errorMsg = getErrorMessage(faceResult.returnCode, faceResult.returnMessage);
+          const code = Number(faceResult.returnCode);
+
+          if (PERMANENT_ERROR_CODES.has(code)) {
+            job.discard();
+            throw new UnrecoverableError(errorMsg, code);
+          }
+          await idempotencyService.releaseLock(lockKey);
+          throw new Error(`[Stage: ${currentStage}] [Mã lỗi ${faceResult.returnCode}]: ${errorMsg}`);
+        }
+
+        currentStage = 'RESOLVE_CLOUD_RESULT';
+        let rawCloudAvatar = faceResult?.data?.path || faceResult?.data?.avatar || faceResult?.data?.faceUrl || faceResult?.data?.file || null;
+        if (isVerifiedHanetCdnUrl(rawCloudAvatar)) {
+          cloudAvatarUrl = rawCloudAvatar;
+        } else if (targetAlias) {
+          // Tra cứu Cloud đối soát qua aliasID
+          try {
+            const lookupRes = await hanetService.getPersonByAliasID(targetAlias);
+            let lookupAvatar = null;
+            if (Array.isArray(lookupRes?.data)) {
+              const match = lookupRes.data.find(p => p && typeof p === 'object' && p.aliasID === targetAlias);
+              if (match) lookupAvatar = match.avatar || match.faceUrl || match.path;
+            } else {
+              const cloudInfo = lookupRes?.data?.data || lookupRes?.data;
+              lookupAvatar = cloudInfo?.avatar || cloudInfo?.faceUrl || cloudInfo?.path;
+            }
+            if (isVerifiedHanetCdnUrl(lookupAvatar)) {
+              cloudAvatarUrl = lookupAvatar;
+            }
+          } catch (lookupErr) {
+            console.warn(`[Worker update_person_job] Tra cứu avatar CDN Cloud cảnh báo:`, lookupErr.message);
+          }
+        }
+
+        if (!cloudAvatarUrl) {
+          needsReconciliation = true;
+          console.warn(`[Worker update_person_job] ⚠️ Cloud báo thành công nhưng chưa có URL CDN đã xác minh. Đưa vào diện cần đối soát.`);
+        }
+      } else {
+        // LUỒNG 2: CẬP NHẬT THÔNG TIN NHÂN SỰ
         currentStage = 'UPDATE_INFO';
-        console.log(`[Worker update_person_job | Job: ${job.id}] [Stage: ${currentStage}] Gọi updateInfo cho PersonID: ${cleanPersonID}`);
-        
+        console.log(`[Worker update_person_job | Job: ${job.id}] [Stage: ${currentStage}] Gọi updateInfo cho PersonID: ${targetPersonId}`);
+
         const infoResult = await hanetService.updateInfo({
-          personID: cleanPersonID,
-          name,
-          aliasID,
-          title,
-          departmentID
+          personID: targetPersonId,
+          name: name || existingPerson.name,
+          aliasID: targetAlias,
+          title: title || existingPerson.title,
+          departmentID: departmentID || existingPerson.department_id
         });
 
         if (infoResult && (infoResult.returnCode !== 1 && infoResult.returnCode !== '1')) {
@@ -716,61 +880,67 @@ registrationQueue.process('update_person_job', 3, async (job) => {
         // Gán phòng ban
         if (departmentID && String(departmentID) !== '0') {
           currentStage = 'ASSIGN_DEPARTMENT';
-          const deptRes = await hanetService.addPersonsToDepartment(departmentID, cleanPersonID);
+          const deptRes = await hanetService.addPersonsToDepartment(departmentID, targetPersonId);
           if (deptRes && (deptRes.returnCode !== 1 && deptRes.returnCode !== '1')) {
             console.warn(`[Worker update_person_job] Cảnh báo gán phòng ban (Code ${deptRes.returnCode}): ${deptRes.returnMessage}`);
           }
         }
+
+        // Cập nhật Face ID nếu có kèm ảnh
+        const faceUrl = publicImageUrl || (imageFilename ? buildPublicImageUrl(imageFilename) : null);
+        if (faceUrl) {
+          currentStage = 'UPDATE_FACE';
+          console.log(`[Worker update_person_job | Job: ${job.id}] [Stage: ${currentStage}] Gọi updateByFaceUrl cho PersonID: ${targetPersonId} | FaceURL: ${faceUrl}`);
+
+          const faceResult = await hanetService.updateByFaceUrl({
+            personID: targetPersonId,
+            aliasID: targetAlias,
+            url: faceUrl,
+            placeID: hanetService.placeId
+          });
+
+          if (faceResult && (faceResult.returnCode !== 1 && faceResult.returnCode !== '1')) {
+            const errorMsg = getErrorMessage(faceResult.returnCode, faceResult.returnMessage);
+            const code = Number(faceResult.returnCode);
+
+            if (PERMANENT_ERROR_CODES.has(code)) {
+              job.discard();
+              throw new UnrecoverableError(errorMsg, code);
+            }
+            await idempotencyService.releaseLock(lockKey);
+            throw new Error(`[Stage: ${currentStage}] [Mã lỗi ${faceResult.returnCode}]: ${errorMsg}`);
+          }
+
+          currentStage = 'RESOLVE_CLOUD_RESULT';
+          let rawCloudAvatar = faceResult?.data?.path || faceResult?.data?.avatar || faceResult?.data?.faceUrl || faceResult?.data?.file || null;
+          if (isVerifiedHanetCdnUrl(rawCloudAvatar)) {
+            cloudAvatarUrl = rawCloudAvatar;
+          } else if (targetAlias) {
+            try {
+              const lookupRes = await hanetService.getPersonByAliasID(targetAlias);
+              let lookupAvatar = null;
+              if (Array.isArray(lookupRes?.data)) {
+                const match = lookupRes.data.find(p => p && typeof p === 'object' && p.aliasID === targetAlias);
+                if (match) lookupAvatar = match.avatar || match.faceUrl || match.path;
+              } else {
+                const cloudInfo = lookupRes?.data?.data || lookupRes?.data;
+                lookupAvatar = cloudInfo?.avatar || cloudInfo?.faceUrl || cloudInfo?.path;
+              }
+              if (isVerifiedHanetCdnUrl(lookupAvatar)) {
+                cloudAvatarUrl = lookupAvatar;
+              }
+            } catch (lookupErr) {
+              console.warn(`[Worker update_person_job] Tra cứu avatar CDN Cloud cảnh báo:`, lookupErr.message);
+            }
+          }
+
+          if (!cloudAvatarUrl) {
+            needsReconciliation = true;
+          }
+        }
       }
 
-      // 2. Cập nhật Face ID nếu có ảnh mới
-      const faceUrl = publicImageUrl || (imageFilename ? buildPublicImageUrl(imageFilename) : null);
-      if (faceUrl) {
-        currentStage = 'UPDATE_FACE';
-        console.log(`[Worker update_person_job | Job: ${job.id}] [Stage: ${currentStage}] Gọi updateByFaceUrl cho PersonID: ${cleanPersonID} | FaceURL: ${faceUrl}`);
-
-        const faceResult = await hanetService.updateByFaceUrl({
-          personID: cleanPersonID,
-          faceUrl,
-          aliasID
-        });
-
-        if (faceResult && (faceResult.returnCode !== 1 && faceResult.returnCode !== '1')) {
-          const errorMsg = getErrorMessage(faceResult.returnCode, faceResult.returnMessage);
-          const code = Number(faceResult.returnCode);
-
-          if (PERMANENT_ERROR_CODES.has(code)) {
-            job.discard();
-            throw new UnrecoverableError(errorMsg, code);
-          }
-          await idempotencyService.releaseLock(lockKey);
-          throw new Error(`[Stage: ${currentStage}] [Mã lỗi ${faceResult.returnCode}]: ${errorMsg}`);
-        }
-
-        currentStage = 'RESOLVE_CLOUD_RESULT';
-        let rawCloudAvatar = faceResult?.data?.avatar || faceResult?.data?.faceUrl || faceResult?.data?.file || null;
-        if (!isVerifiedHanetCdnUrl(rawCloudAvatar) && aliasID) {
-          try {
-            const lookupRes = await hanetService.getPersonByAliasID(aliasID);
-            let lookupAvatar = null;
-            if (Array.isArray(lookupRes?.data)) {
-              const match = lookupRes.data.find(p => p && typeof p === 'object' && p.aliasID === aliasID);
-              if (match) lookupAvatar = match.avatar || match.faceUrl;
-            } else {
-              const cloudInfo = lookupRes?.data?.data || lookupRes?.data;
-              lookupAvatar = cloudInfo?.avatar || cloudInfo?.faceUrl;
-            }
-            if (isVerifiedHanetCdnUrl(lookupAvatar)) {
-              rawCloudAvatar = lookupAvatar;
-            }
-          } catch (lookupErr) {
-            console.warn(`[Worker update_person_job] Tra cứu avatar CDN Cloud cảnh báo:`, lookupErr.message);
-          }
-        }
-        cloudAvatarUrl = isVerifiedHanetCdnUrl(rawCloudAvatar) ? rawCloudAvatar : null;
-      }
-
-      // 3. Cập nhật PostgreSQL an toàn trong 1 Transaction
+      // 5. Cập nhật PostgreSQL trong 1 Transaction ngắn
       currentStage = 'SAVE_DB';
       console.log(`[Worker update_person_job | Job: ${job.id}] [Stage: ${currentStage}] Ghi nhận kết quả vào PostgreSQL...`);
 
@@ -778,55 +948,90 @@ registrationQueue.process('update_person_job', 3, async (job) => {
       try {
         await dbClient.query('BEGIN');
 
-        // Target chính xác hồ sơ theo person_id và alias_id
-        const updatePersonsRes = await dbClient.query(
-          `UPDATE persons
-           SET name = COALESCE($1, name),
-               title = COALESCE($2, title),
-               face_url = COALESCE($3, face_url),
-               department_id = COALESCE($4, department_id),
-               sync_status = 'SYNCED',
-               updated_at = CURRENT_TIMESTAMP
-           WHERE person_id = $5`,
-          [
-            name || null,
-            title || null,
-            cloudAvatarUrl || null,
-            departmentID || null,
-            cleanPersonID
-          ]
-        );
+        let updatePersonsRes;
+        const newSyncStatus = needsReconciliation ? 'PENDING' : 'SYNCED';
 
-        if (updatePersonsRes.rowCount === 0 && aliasID) {
-          await dbClient.query(
+        if (isPurePhotoUpdate) {
+          // UPDATE_PHOTO CHỈ cập nhật face_url và sync_status
+          updatePersonsRes = await dbClient.query(
             `UPDATE persons
-             SET person_id = $1,
-                 name = COALESCE($2, name),
-                 title = COALESCE($3, title),
-                 face_url = COALESCE($4, face_url),
-                 department_id = COALESCE($5, department_id),
-                 sync_status = 'SYNCED',
+             SET face_url = COALESCE($1, face_url),
+                 person_id = COALESCE(persons.person_id, $2),
+                 sync_status = $3,
                  updated_at = CURRENT_TIMESTAMP
-             WHERE alias_id = $6`,
+             WHERE id = $4 AND alias_id = $5`,
             [
-              cleanPersonID,
+              cloudAvatarUrl || null,
+              targetPersonId || null,
+              newSyncStatus,
+              existingPerson.id,
+              targetAlias
+            ]
+          );
+        } else {
+          updatePersonsRes = await dbClient.query(
+            `UPDATE persons
+             SET name = COALESCE($1, name),
+                 title = COALESCE($2, title),
+                 department_id = COALESCE($3, department_id),
+                 face_url = COALESCE($4, face_url),
+                 person_id = COALESCE(persons.person_id, $5),
+                 sync_status = $6,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $7 AND alias_id = $8`,
+            [
               name || null,
               title || null,
-              cloudAvatarUrl || null,
               departmentID || null,
-              aliasID
+              cloudAvatarUrl || null,
+              targetPersonId || null,
+              newSyncStatus,
+              existingPerson.id,
+              targetAlias
             ]
           );
         }
 
-        if (requestId) {
-          await dbClient.query(
-            `UPDATE registration_requests
-             SET status = 'SYNCED', person_id = $1, updated_at = CURRENT_TIMESTAMP
-             WHERE request_id = $2`,
-            [cleanPersonID, requestId]
-          );
+        if (updatePersonsRes.rowCount !== 1) {
+          throw new Error(`Cập nhật persons thất bại: rowCount = ${updatePersonsRes.rowCount} (kỳ vọng đúng 1 bản ghi).`);
         }
+
+        if (requestId) {
+          const reqStatus = needsReconciliation ? 'REVIEW_REQUIRED' : 'SYNCED';
+          const reqError = needsReconciliation ? 'Cloud chưa trả URL CDN ảnh đã xác minh, cần đối soát.' : null;
+          const updateReqRes = await dbClient.query(
+            `UPDATE registration_requests
+             SET status = $1,
+                 person_id = COALESCE(registration_requests.person_id, $2),
+                 error_message = $3,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE request_id = $4 AND alias_id = $5`,
+            [reqStatus, targetPersonId || null, reqError, requestId, targetAlias]
+          );
+
+          if (updateReqRes.rowCount !== 1) {
+            throw new Error(`Cập nhật registration_requests thất bại: rowCount = ${updateReqRes.rowCount} cho requestId ${requestId}`);
+          }
+        }
+
+        // Lưu Audit Log trong cùng Transaction
+        await dbClient.query(
+          `INSERT INTO audit_logs (action, user_id, target_id, details, created_at)
+           VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
+          [
+            isPurePhotoUpdate ? 'UPDATE_PHOTO' : 'UPDATE_PERSON',
+            requestId || 'WORKER',
+            targetAlias,
+            JSON.stringify({
+              personID: targetPersonId,
+              aliasID: targetAlias,
+              isPhotoOnly: isPurePhotoUpdate,
+              cloudAvatarUrl: cloudAvatarUrl || null,
+              needsReconciliation,
+              stage: currentStage
+            })
+          ]
+        );
 
         await dbClient.query('COMMIT');
       } catch (dbErr) {
@@ -840,13 +1045,13 @@ registrationQueue.process('update_person_job', 3, async (job) => {
       await idempotencyService.markCompleted(lockKey, 3600);
       jobSucceeded = true;
 
-      console.log(`[Worker update_person_job | Job: ${job.id}] ✅ [Stage: ${currentStage}] Hoàn tất cập nhật PersonID: ${cleanPersonID}`);
+      console.log(`[Worker update_person_job | Job: ${job.id}] ✅ [Stage: ${currentStage}] Hoàn tất cập nhật: ${targetAlias} (PersonID: ${targetPersonId || 'N/A'})`);
 
       if (imagePath && fs.existsSync(imagePath)) {
         imageService.cleanupDelayed(imagePath, 30000);
       }
 
-      return { success: true, personID: cleanPersonID };
+      return { success: true, personID: targetPersonId, aliasID: targetAlias };
     } catch (err) {
       if (err instanceof UnrecoverableError || err.name === 'UnrecoverableError') {
         throw err;
@@ -860,11 +1065,11 @@ registrationQueue.process('update_person_job', 3, async (job) => {
         throw new UnrecoverableError(errorMsg, code);
       }
 
-      await idempotencyService.releaseLock(lockKey);
+      await idempotencyService.releaseLock(lockKey).catch(() => {});
       throw err;
     }
   } finally {
-    // Không xóa ảnh khi retry
+    // Bảo vệ an toàn
   }
 });
 
